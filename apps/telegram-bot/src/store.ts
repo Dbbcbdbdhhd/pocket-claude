@@ -16,6 +16,8 @@ export interface Link {
     brainEncPub: string;
   };
   replay: Record<string, number>;
+  /** Chat that plain messages go to; unset until the person starts or picks one. */
+  activeSession?: string;
 }
 
 export interface BotState {
