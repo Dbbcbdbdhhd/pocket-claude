@@ -1,0 +1,21 @@
+{
+  "name": "@pocket/telegram-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@pocket/client-core": "workspace:*",
+    "@pocket/protocol": "workspace:*",
+    "@pocket/transport": "workspace:*",
+    "grammy": "^1.46.0",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.2"
+  }
+}

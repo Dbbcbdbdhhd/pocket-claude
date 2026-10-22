@@ -2,7 +2,10 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { createConnection, createServer, type Socket } from 'node:net';
+import { fileStore, PocketBot } from '@pocket/telegram-bot';
 import qrcode from 'qrcode-terminal';
+import { WebSocket as NodeWebSocket } from 'ws';
+import type { WebSocketCtor } from '@pocket/transport';
 import { Brain, type BrainStatus, type PairingTicket, type UserSummary } from './daemon.js';
 import { log, logToStderr } from './log.js';
 import { ensureDirs, loadOrCreateIdentity, loadState, paths, saveState } from './store.js';
@@ -19,6 +22,7 @@ type Request =
   | { cmd: 'allow.add'; rule: string }
   | { cmd: 'allow.remove'; rule: string }
   | { cmd: 'relay.move'; url: string }
+  | { cmd: 'telegram.set'; config: { token: string; username: string } | null }
   | { cmd: 'stop' };
 
 type Response = { ok: true; data?: unknown } | { ok: false; error: string };
@@ -43,22 +47,62 @@ async function runDaemon(): Promise<void> {
   log(`brain ${brain.deviceId} account ${brain.accountId} relay ${state.relayUrl} claude ${claudePath ?? 'bundled'}`);
 
   if (existsSync(paths.socket)) unlinkSync(paths.socket);
-  const server = createServer((socket) => handleControl(socket, brain, () => shutdown()));
+  const telegram = new TelegramRunner(brain);
+  const server = createServer((socket) => handleControl(socket, brain, telegram, () => shutdown()));
   server.listen(paths.socket);
 
-  const shutdown = () => {
+  const shutdown = async () => {
     log('shutting down');
     server.close();
+    await telegram.stop();
     brain.stop();
     if (existsSync(paths.socket)) unlinkSync(paths.socket);
     process.exit(0);
   };
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', () => void shutdown());
+  process.on('SIGINT', () => void shutdown());
   brain.start();
+  telegram.apply();
 }
 
-function handleControl(socket: Socket, brain: Brain, shutdown: () => void): void {
+/** Runs the Telegram bot inside the daemon while a token is configured; the bot talks to the brain through the relay like a phone. */
+class TelegramRunner {
+  private bot: PocketBot | undefined;
+  private token: string | undefined;
+
+  constructor(private readonly brain: Brain) {}
+
+  /** Starts, restarts or stops the bot to match the brain's configuration. */
+  apply(): void {
+    const config = this.brain.telegram;
+    if (config?.token === this.token) return;
+    void this.stop().then(() => {
+      if (!config) return;
+      this.token = config.token;
+      const bot = new PocketBot({
+        token: config.token,
+        relayUrl: this.brain.status().relayUrl,
+        store: fileStore(join(paths.home, 'telegram.json')),
+        log,
+        WebSocket: NodeWebSocket as unknown as WebSocketCtor,
+      });
+      this.bot = bot;
+      bot.start().catch((e) => {
+        log(`telegram bot stopped: ${e instanceof Error ? e.message : String(e)}`);
+        if (this.bot === bot) this.bot = undefined;
+      });
+    });
+  }
+
+  async stop(): Promise<void> {
+    const bot = this.bot;
+    this.bot = undefined;
+    this.token = undefined;
+    await bot?.stop().catch(() => {});
+  }
+}
+
+function handleControl(socket: Socket, brain: Brain, telegram: TelegramRunner, shutdown: () => void): void {
   let buf = '';
   socket.on('data', (chunk) => {
     buf += chunk.toString();
@@ -85,6 +129,10 @@ function handleControl(socket: Socket, brain: Brain, shutdown: () => void): void
           return reply({ ok: true });
         case 'relay.move':
           return reply({ ok: true, data: brain.movePublicRelay(req.url) });
+        case 'telegram.set':
+          brain.configureTelegram(req.config);
+          telegram.apply();
+          return reply({ ok: true });
         case 'allow.list':
           return reply({ ok: true, data: brain.allowlist() });
         case 'allow.add': {
@@ -154,6 +202,14 @@ function printTicket(t: PairingTicket): void {
   qrcode.generate(t.uri, { small: true });
   console.log(`\nWindows (VS Code → "Pocket Claude: Pair with Mac"):\n  code           ${t.code}\n  safety number  ${t.safetyNumber}`);
   console.log(`\nValid until ${new Date(t.expiresAt).toLocaleTimeString()}. The code works for one phone and one Windows laptop.`);
+}
+
+/** Checks the token with Telegram and returns the bot's username. */
+async function telegramGetMe(token: string): Promise<string> {
+  const res = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+  const body = (await res.json()) as { ok: boolean; result?: { username?: string }; description?: string };
+  if (!body.ok || !body.result?.username) throw new Error(body.description ?? 'Telegram rejected the token');
+  return body.result.username;
 }
 
 function printUsage(days: number): void {
@@ -245,6 +301,21 @@ async function main(): Promise<void> {
     case 'search':
       if (!arg) throw new Error('Usage: pocket-claude search <text>');
       return searchHistory(process.argv.slice(3).join(' '));
+    case 'telegram': {
+      if (!arg) throw new Error('Usage: pocket-claude telegram <bot token from @BotFather> | off');
+      const config = arg === 'off' ? null : { token: arg, username: await telegramGetMe(arg) };
+      try {
+        await call({ cmd: 'telegram.set', config });
+        return console.log(config ? `Telegram bot @${config.username} is running. On the phone: Settings → Telegram → Link.` : 'Telegram bot stopped and forgotten.');
+      } catch {
+        ensureDirs();
+        const state = loadState();
+        if (config) state.telegram = config;
+        else delete state.telegram;
+        saveState(state);
+        return console.log(config ? `Daemon not running; bot @${config.username} starts with it.` : 'Daemon not running; the bot is forgotten.');
+      }
+    }
     case 'relay': {
       if (!arg) throw new Error('Usage: pocket-claude relay <public url>');
       const url = new URL(arg).toString();
@@ -260,7 +331,7 @@ async function main(): Promise<void> {
       }
     }
     default:
-      console.log('Usage: pocket-claude <daemon|status|pair|invite [name]|users [remove <name>]|remove <deviceId>|kill|stop|relay <url>|allow ...|usage [days]|search <text>>');
+      console.log('Usage: pocket-claude <daemon|status|pair|invite [name]|users [remove <name>]|remove <deviceId>|kill|stop|relay <url>|telegram <token>|off|allow ...|usage [days]|search <text>>');
       process.exitCode = cmd ? 1 : 0;
   }
 }

@@ -270,6 +270,18 @@ export class Brain {
     return next;
   }
 
+  /** Turns the Telegram bot on (token + username from getMe) or off; phones learn about it through the status. */
+  configureTelegram(config: { token: string; username: string } | null): void {
+    if (config) this.state.telegram = config;
+    else delete this.state.telegram;
+    this.persistNow();
+    this.broadcastStatus();
+  }
+
+  get telegram(): { token: string; username: string } | undefined {
+    return this.state.telegram;
+  }
+
   removeDevice(deviceId: string): boolean {
     const device = this.state.devices.find((d) => d.deviceId === deviceId);
     if (!device) return false;
@@ -662,6 +674,20 @@ export class Brain {
         if (panel) this.removeDevice(panel.deviceId);
         return;
       }
+      case 'telegram.link': {
+        const bot = this.state.telegram?.username;
+        if (!bot) return this.sendError(from, 'no_telegram', 'No Telegram bot is set up on the Mac (pocket-claude telegram <token>)');
+        try {
+          const t = this.startPairing(undefined, { userId });
+          this.link.send(from, { type: 'telegram.linking', payload: { url: `https://t.me/${bot}?start=${t.code}`, code: t.code, expiresAt: t.expiresAt } });
+        } catch (e) {
+          this.sendError(from, 'pairing_failed', e instanceof Error ? e.message : String(e));
+        }
+        return;
+      }
+      case 'device.unpair':
+        this.removeDevice(from);
+        return;
       case 'user.invite': {
         if (!owner) return this.sendError(from, 'not_owner', "Only the Mac's owner can invite people");
         try {
@@ -838,6 +864,7 @@ export class Brain {
         executorOnline: this.executor.online(executor),
         workspaces: this.executor.info(executor)?.workspaces ?? [],
         ...(user ? { user: { id: user.id, name: user.name, owner: user.owner === true } } : {}),
+        ...(this.state.telegram ? { telegramBot: this.state.telegram.username } : {}),
       },
     };
   }

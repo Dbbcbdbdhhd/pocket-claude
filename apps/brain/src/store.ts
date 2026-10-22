@@ -74,6 +74,8 @@ export interface BrainState {
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** Default computer per person (`userId` → `deviceId`): the one picked last on their phone. */
   activeExecutors?: Record<string, string>;
+  /** The Telegram bot the daemon runs; set with `pocket-claude telegram <token>`. */
+  telegram?: { token: string; username: string };
   /** @deprecated single-user default computer; `migrateState` moves it into `activeExecutors`. */
   activeExecutor?: string;
 }

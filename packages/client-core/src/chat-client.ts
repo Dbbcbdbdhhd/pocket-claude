@@ -7,6 +7,7 @@ export type PermissionRequest = PayloadOf<'permission.request'>;
 export type Activity = PayloadOf<'activity.result'>;
 export type PairingTicket = PayloadOf<'computer.pairing'>;
 export type Invitation = PayloadOf<'user.invitation'>;
+export type TelegramLink = PayloadOf<'telegram.linking'>;
 
 export interface ChatState {
   connection: 'connecting' | 'online' | 'offline';
@@ -28,6 +29,8 @@ export interface ChatState {
   pairing: PairingTicket | null;
   /** Link that registers a new person, after `invite()`; owners only. */
   invitation: Invitation | null;
+  /** Link that connects the Mac's Telegram bot to this person, after `linkTelegram()`. */
+  telegramLink: TelegramLink | null;
   lastError: string | null;
 }
 
@@ -73,6 +76,7 @@ const INITIAL: ChatState = {
   mac: null,
   pairing: null,
   invitation: null,
+  telegramLink: null,
   lastError: null,
 };
 
@@ -328,6 +332,21 @@ export class ChatClient {
     this.patch({ invitation: null });
   }
 
+  /** Asks for a Telegram deep link; it arrives in `state.telegramLink`. */
+  linkTelegram(): boolean {
+    this.patch({ telegramLink: null });
+    return this.request({ type: 'telegram.link', payload: {} });
+  }
+
+  clearTelegramLink(): void {
+    this.patch({ telegramLink: null });
+  }
+
+  /** Tells the Mac to forget this device; the caller wipes its keys afterwards. */
+  unpairDevice(): boolean {
+    return this.link.send(this.opts.brainDeviceId, { type: 'device.unpair', payload: {} });
+  }
+
   /** Who this client belongs to, once the brain has said so. */
   get user(): HostStatus['user'] | undefined {
     return this.state.host?.user;
@@ -413,6 +432,8 @@ export class ChatClient {
         return this.patch({ pairing: message.payload });
       case 'user.invitation':
         return this.patch({ invitation: message.payload });
+      case 'telegram.linking':
+        return this.patch({ telegramLink: message.payload });
       case 'clipboard.result':
         return this.settleClipboard(message.payload.requestId, message.payload.items, message.payload.error);
       case 'clipboard.written':

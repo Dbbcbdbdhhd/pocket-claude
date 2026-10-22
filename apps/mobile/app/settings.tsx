@@ -3,7 +3,7 @@ import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import type { ReactNode } from 'react';
 import { useEffect } from 'react';
-import { Alert, Pressable, ScrollView, Share, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, Linking, Pressable, ScrollView, Share, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { IconName } from '../src/format';
 import { useLock } from '../src/lock';
@@ -71,6 +71,20 @@ export default function SettingsScreen() {
     }).catch(() => {});
   }, [state.invitation, client]);
 
+  const telegramBot = state.host?.telegramBot;
+  const linkTelegram = () => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    client?.linkTelegram();
+  };
+
+  useEffect(() => {
+    const link = state.telegramLink;
+    if (!link || !client) return;
+    client.clearTelegramLink();
+    // Opens the bot in Telegram with the code as its start parameter; the bot joins as another device of this person.
+    void Linking.openURL(link.url).catch(() => Alert.alert('Telegram', `Open this link within 5 minutes:\n${link.url}`));
+  }, [state.telegramLink, client]);
+
   const stopEverything = () =>
     Alert.alert(owner ? 'Stop everything?' : 'Stop your chats?', owner ? 'Kills all Claude processes on the Mac and all running commands on the Windows laptop.' : 'Kills your Claude chats and the commands running on your computers.', [
       { text: 'Cancel', style: 'cancel' },
@@ -110,6 +124,15 @@ export default function SettingsScreen() {
             onPress={state.brainOnline ? invite : undefined}
           />
         ) : null}
+
+        <Section title="Telegram" />
+        <Row
+          icon="paper-plane-outline"
+          label={telegramBot ? `Link @${telegramBot}` : 'Telegram bot'}
+          hint={telegramBot ? 'Get and set the PC clipboard from Telegram' : 'Not set up on the Mac: pocket-claude telegram <token>'}
+          tint={telegramBot ? colors.accent : colors.text}
+          onPress={telegramBot && state.brainOnline ? linkTelegram : undefined}
+        />
 
         <Section title="Connection" />
         <Row icon="cloud-outline" label="Relay" value={credentials?.relayUrl ?? '—'} />

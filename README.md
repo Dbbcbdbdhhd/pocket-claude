@@ -13,6 +13,7 @@ Everything between devices is end-to-end encrypted; the relay only sees cipherte
 | `apps/mobile` | Expo / React Native app (Android). The chat is in Direct. |
 | `apps/executor-extension` | VS Code extension: executes tool calls in the open workspace, has a chat panel. |
 | `apps/clipboard-agent` | `PocketClipboard.exe` for Windows: shares the clipboard with the phone and shows AI replies in an overlay window (double-tap Alt). |
+| `apps/telegram-bot` | Telegram bot run by the brain daemon (`pocket-claude telegram <token>`): the PC clipboard from Telegram, one linked account per person. |
 | `packages/protocol` | Crypto, envelopes, message schemas, pairing. |
 | `packages/transport` | `DeviceLink` (authenticated, encrypted WebSocket link) and `joinAccount` (pairing). |
 | `packages/client-core` | Chat state and formatting shared by the phone, the VS Code panel and the overlay. |

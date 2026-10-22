@@ -46,6 +46,7 @@ const EMPTY_STATE: ChatState = {
   mac: null,
   pairing: null,
   invitation: null,
+  telegramLink: null,
   lastError: null,
 };
 
@@ -152,10 +153,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const unpair = useCallback(async () => {
+    // Best effort: the Mac forgets this phone; the keys are wiped either way.
+    if (client?.unpairDevice()) await new Promise((r) => setTimeout(r, 300));
     setCredentials(null);
     await wipeAll();
     setPhase('unpaired');
-  }, []);
+  }, [client]);
 
   const value = useMemo(() => ({ phase, credentials, client, pair, unpair }), [phase, credentials, client, pair, unpair]);
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
