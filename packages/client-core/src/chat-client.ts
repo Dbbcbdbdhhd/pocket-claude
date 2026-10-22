@@ -6,6 +6,7 @@ export type HostStatus = PayloadOf<'host.status'>;
 export type PermissionRequest = PayloadOf<'permission.request'>;
 export type Activity = PayloadOf<'activity.result'>;
 export type PairingTicket = PayloadOf<'computer.pairing'>;
+export type Invitation = PayloadOf<'user.invitation'>;
 
 export interface ChatState {
   connection: 'connecting' | 'online' | 'offline';
@@ -25,6 +26,8 @@ export interface ChatState {
   mac: { name: string; projects: Project[] } | null;
   /** Code to type into VS Code on a new computer, while a pairing is open. */
   pairing: PairingTicket | null;
+  /** Link that registers a new person, after `invite()`; owners only. */
+  invitation: Invitation | null;
   lastError: string | null;
 }
 
@@ -69,6 +72,7 @@ const INITIAL: ChatState = {
   activeComputer: null,
   mac: null,
   pairing: null,
+  invitation: null,
   lastError: null,
 };
 
@@ -314,6 +318,21 @@ export class ChatClient {
     this.patch({ pairing: null });
   }
 
+  /** Owner only: asks for an invite link; it arrives in `state.invitation`. */
+  invite(): boolean {
+    this.patch({ invitation: null });
+    return this.request({ type: 'user.invite', payload: {} });
+  }
+
+  clearInvitation(): void {
+    this.patch({ invitation: null });
+  }
+
+  /** Who this client belongs to, once the brain has said so. */
+  get user(): HostStatus['user'] | undefined {
+    return this.state.host?.user;
+  }
+
   removeComputer(deviceId: string): boolean {
     return this.request({ type: 'computer.remove', payload: { deviceId } });
   }
@@ -392,6 +411,8 @@ export class ChatClient {
       }
       case 'computer.pairing':
         return this.patch({ pairing: message.payload });
+      case 'user.invitation':
+        return this.patch({ invitation: message.payload });
       case 'clipboard.result':
         return this.settleClipboard(message.payload.requestId, message.payload.items, message.payload.error);
       case 'clipboard.written':

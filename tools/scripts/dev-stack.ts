@@ -38,7 +38,7 @@ const relayUrl = `http://127.0.0.1:${new URL(relay.url).port}`;
 const claudePath = execFileSync('/bin/zsh', ['-lc', 'command -v claude'], { encoding: 'utf8' }).trim();
 const brain = new Brain(
   generateIdentity(),
-  { relayUrl, devices: [], allowlist: [], sessions: [], replay: {} },
+  { relayUrl, devices: [], users: [], allowlist: [], sessions: [], replay: {} },
   { persist: false, claudeOptions: { pathToClaudeCodeExecutable: claudePath, ...(arg('--model') ? { model: arg('--model') } : {}) } },
 );
 brain.start();

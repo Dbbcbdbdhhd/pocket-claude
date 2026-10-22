@@ -3,13 +3,16 @@ import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { createConnection, createServer, type Socket } from 'node:net';
 import qrcode from 'qrcode-terminal';
-import { Brain, type BrainStatus, type PairingTicket } from './daemon.js';
+import { Brain, type BrainStatus, type PairingTicket, type UserSummary } from './daemon.js';
 import { log, logToStderr } from './log.js';
 import { ensureDirs, loadOrCreateIdentity, loadState, paths, saveState } from './store.js';
 
 type Request =
   | { cmd: 'status' }
   | { cmd: 'pair' }
+  | { cmd: 'invite'; name?: string }
+  | { cmd: 'users' }
+  | { cmd: 'users.remove'; user: string }
   | { cmd: 'remove'; deviceId: string }
   | { cmd: 'kill' }
   | { cmd: 'allow.list' }
@@ -69,6 +72,12 @@ function handleControl(socket: Socket, brain: Brain, shutdown: () => void): void
           return reply({ ok: true, data: brain.status() });
         case 'pair':
           return reply({ ok: true, data: brain.startPairing() });
+        case 'invite':
+          return reply({ ok: true, data: brain.startPairing(undefined, { invite: req.name ? { name: req.name } : {} }) });
+        case 'users':
+          return reply({ ok: true, data: brain.users() });
+        case 'users.remove':
+          return reply(brain.removeUser(req.user) ? { ok: true } : { ok: false, error: 'No such person (the owner cannot be removed)' });
         case 'remove':
           return reply(brain.removeDevice(req.deviceId) ? { ok: true } : { ok: false, error: 'No such device' });
         case 'kill':
@@ -120,11 +129,27 @@ function printStatus(s: BrainStatus): void {
   console.log(`Account    ${s.accountId}`);
   console.log('Devices');
   if (!s.devices.length) console.log('  (none — run: pocket-claude pair)');
-  for (const d of s.devices) console.log(`  ${dot(d.online)} ${d.role.padEnd(8)} ${d.name}  ${d.deviceId}`);
+  for (const d of s.devices) console.log(`  ${dot(d.online)} ${d.role.padEnd(8)} ${d.name}  ${d.user}  ${d.deviceId}`);
   console.log(`Sessions   ${s.sessions.length}`);
 }
 
+function printUsers(users: UserSummary[]): void {
+  const dot = (b: boolean) => (b ? '●' : '○');
+  for (const u of users) {
+    console.log(`${u.name}${u.owner ? ' (owner)' : ''}  id ${u.id}  ${u.sessions} chat${u.sessions === 1 ? '' : 's'}`);
+    for (const d of u.devices) console.log(`  ${dot(d.online)} ${d.role.padEnd(8)} ${d.name}  ${d.deviceId}`);
+    if (!u.devices.length) console.log('  (no devices)');
+  }
+}
+
 function printTicket(t: PairingTicket): void {
+  if (t.invite) {
+    console.log('Invite: the new person scans this QR code in the Pocket Claude app (or opens the link) and enters their name.\n');
+    qrcode.generate(t.uri, { small: true });
+    console.log(`\n  link  ${t.uri}\n  safety number  ${t.safetyNumber}`);
+    console.log(`\nValid until ${new Date(t.expiresAt).toLocaleTimeString()}. Their computers are added from their phone afterwards.`);
+    return;
+  }
   console.log('Phone: scan this QR code in the Pocket Claude app\n');
   qrcode.generate(t.uri, { small: true });
   console.log(`\nWindows (VS Code → "Pocket Claude: Pair with Mac"):\n  code           ${t.code}\n  safety number  ${t.safetyNumber}`);
@@ -184,6 +209,17 @@ async function main(): Promise<void> {
       return printStatus(await call<BrainStatus>({ cmd: 'status' }));
     case 'pair':
       return printTicket(await call<PairingTicket>({ cmd: 'pair' }));
+    case 'invite':
+      return printTicket(await call<PairingTicket>({ cmd: 'invite', ...(arg ? { name: process.argv.slice(3).join(' ') } : {}) }));
+    case 'users': {
+      const [, sub, ...rest] = process.argv.slice(2);
+      if (sub === 'remove' && rest.length) {
+        await call({ cmd: 'users.remove', user: rest.join(' ') });
+        return console.log('Removed with all their devices and chats.');
+      }
+      if (sub && sub !== 'list') throw new Error('Usage: pocket-claude users [list | remove <name or id>]');
+      return printUsers(await call<UserSummary[]>({ cmd: 'users' }));
+    }
     case 'remove':
       if (!arg) throw new Error('Usage: pocket-claude remove <deviceId>');
       await call({ cmd: 'remove', deviceId: arg });
@@ -224,7 +260,7 @@ async function main(): Promise<void> {
       }
     }
     default:
-      console.log('Usage: pocket-claude <daemon|status|pair|remove <deviceId>|kill|stop|relay <url>|allow ...|usage [days]|search <text>>');
+      console.log('Usage: pocket-claude <daemon|status|pair|invite [name]|users [remove <name>]|remove <deviceId>|kill|stop|relay <url>|allow ...|usage [days]|search <text>>');
       process.exitCode = cmd ? 1 : 0;
   }
 }

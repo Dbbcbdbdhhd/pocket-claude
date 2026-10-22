@@ -74,7 +74,7 @@ async function connect(role: 'executor' | 'client', name: string) {
 beforeAll(async () => {
   ensureDirs();
   relay = await startNodeRelay({ port: 0 });
-  brain = new Brain(generateIdentity(), { relayUrl: relay.url, devices: [], allowlist: [], sessions: [], replay: {} }, { persist: false });
+  brain = new Brain(generateIdentity(), { relayUrl: relay.url, devices: [], users: [], allowlist: [], sessions: [], replay: {} }, { persist: false });
   brain.start();
   await until<void>('brain ready', (ok) => {
     const t = setInterval(() => brain.status().relayConnected && (clearInterval(t), ok()), 25);

@@ -50,7 +50,7 @@ step(`relay ${relay.url}`);
 
 const brain = new Brain(
   generateIdentity(),
-  { relayUrl: relay.url, devices: [], allowlist: [], sessions: [], replay: {} },
+  { relayUrl: relay.url, devices: [], users: [], allowlist: [], sessions: [], replay: {} },
   { persist: false, claudeOptions: { pathToClaudeCodeExecutable: claudePath, model } },
 );
 brain.start();

@@ -26,6 +26,8 @@ export const sessionMetaSchema = z.object({
   project: z.string().optional(),
   /** Hidden from the chat list on clients, still kept on the brain. */
   hidden: z.boolean().optional(),
+  /** The person the chat belongs to; the brain shows each client only its own person's chats. */
+  userId: z.string().optional(),
   /** Claude Code session behind this chat; it is tied to a working directory, so moving the chat starts a new one. */
   engine: z.object({ id: z.string(), cwd: z.string() }).optional(),
 });
@@ -173,6 +175,8 @@ export const innerMessageBodySchema = z.discriminatedUnion('type', [
   m('clipboard.get', z.object({ requestId: z.string(), deviceId: z.string() })),
   m('clipboard.set', z.object({ requestId: z.string(), deviceId: z.string(), item: clipboardItemSchema })),
   m('computer.remove', z.object({ deviceId: z.string() })),
+  /** Owner only: asks for an invite link that registers a new person with their own phone, computers and chats. */
+  m('user.invite', z.object({})),
 
   // brain → client
   m('host.status', z.object({
@@ -181,6 +185,8 @@ export const innerMessageBodySchema = z.discriminatedUnion('type', [
     claudeVersion: z.string().optional(),
     executorOnline: z.boolean(),
     workspaces: z.array(z.string()),
+    /** Who this client belongs to. Owners may work on the Mac itself and invite people. */
+    user: z.object({ id: z.string(), name: z.string(), owner: z.boolean() }).optional(),
   })),
   m('session.created', z.object({ session: sessionMetaSchema })),
   m('session.list.result', z.object({ sessions: z.array(sessionMetaSchema) })),
@@ -205,6 +211,7 @@ export const innerMessageBodySchema = z.discriminatedUnion('type', [
     mac: z.object({ name: z.string(), projects: z.array(projectSchema) }).optional(),
   })),
   m('computer.pairing', z.object({ code: z.string(), safetyNumber: z.string(), expiresAt: z.number() })),
+  m('user.invitation', z.object({ uri: z.string(), code: z.string(), safetyNumber: z.string(), expiresAt: z.number() })),
   m('clipboard.result', z.object({ requestId: z.string(), deviceId: z.string(), items: z.array(clipboardItemSchema).optional(), error: z.string().optional() })),
   m('clipboard.written', z.object({ requestId: z.string(), deviceId: z.string(), error: z.string().optional() })),
   m('activity.result', z.object({

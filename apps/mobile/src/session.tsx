@@ -21,7 +21,8 @@ interface SessionContextValue {
   phase: Phase;
   credentials: StoredCredentials | null;
   client: ChatClient | null;
-  pair: (args: { relayUrl: string; code: PairingCode }) => Promise<void>;
+  /** `userName` registers a new person (invite links); without it the phone joins the code's owner. */
+  pair: (args: { relayUrl: string; code: PairingCode; userName?: string }) => Promise<void>;
   unpair: () => Promise<void>;
 }
 
@@ -44,6 +45,7 @@ const EMPTY_STATE: ChatState = {
   activeComputer: null,
   mac: null,
   pairing: null,
+  invitation: null,
   lastError: null,
 };
 
@@ -128,12 +130,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, [credentials]);
 
-  const pair = useCallback(async ({ relayUrl, code }: { relayUrl: string; code: PairingCode }) => {
+  const pair = useCallback(async ({ relayUrl, code, userName }: { relayUrl: string; code: PairingCode; userName?: string }) => {
     const joined = await joinAccount({
       relayUrl,
       code,
       role: 'client',
       name: Device.modelName ?? 'Android phone',
+      ...(userName ? { userName } : {}),
     });
     const next: StoredCredentials = {
       relayUrl,

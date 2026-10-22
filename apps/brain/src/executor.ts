@@ -130,8 +130,11 @@ export class ExecutorBridge {
     for (const p of [...this.pending.values()]) if (!executorId || p.executorId === executorId) p.resolve({ content: reason, isError: true });
   }
 
-  killAll(): void {
-    for (const id of this.deps.executorIds()) this.deps.send(id, { type: 'control.kill', payload: { scope: 'all' } });
-    this.failAll('Stopped by kill switch.');
+  /** Stops work on the given computers, or on every paired one. */
+  killAll(ids?: string[]): void {
+    const targets = ids ?? this.deps.executorIds();
+    for (const id of targets) this.deps.send(id, { type: 'control.kill', payload: { scope: 'all' } });
+    if (ids) for (const id of ids) this.failAll('Stopped by kill switch.', id);
+    else this.failAll('Stopped by kill switch.');
   }
 }

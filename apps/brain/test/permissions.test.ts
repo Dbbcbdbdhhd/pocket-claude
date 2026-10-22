@@ -8,7 +8,7 @@ function makeHost(allowAlways: string[] = []) {
   const host: PermissionHost = {
     isAllowedAlways: (t) => allowAlways.includes(t),
     request: (p) => requests.push({ requestId: p.requestId, tool: p.tool }),
-    resolved: (requestId, decision, by) => resolved.push({ requestId, decision, by }),
+    resolved: (requestId, _sessionId, decision, by) => resolved.push({ requestId, decision, by }),
     waiting: (s, w) => waiting.push([s, w]),
   };
   return { host, requests, resolved, waiting };

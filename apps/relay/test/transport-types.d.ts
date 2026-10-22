@@ -66,6 +66,7 @@ export function joinAccount(args: {
   code: PairingCode;
   role: Exclude<Role, 'brain'>;
   name: string;
+  userName?: string;
   identity?: Identity;
   confirmSafetyNumber?: (safetyNumber: string) => Promise<boolean>;
   fetch?: typeof fetch;

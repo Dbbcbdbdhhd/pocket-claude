@@ -52,6 +52,8 @@ describe('pairing code', () => {
     expect(parsed.relayUrl).toBe(relay);
     expect(parsed.code.pairingId).toBe(code.pairingId);
     expect(parsed.code.bytes).toEqual(code.bytes);
+    expect(parsed.invite).toBe(false);
+    expect(parsePairingUri(pairingUri(code, relay, { invite: true }))).toMatchObject({ relayUrl: relay, invite: true });
   });
 
   it('rejects foreign uris', () => {
@@ -74,6 +76,16 @@ describe('pair request', () => {
     expect(req.pairingId).toBe(code.pairingId);
     expect(req.signPub).toBe(b64.encode(device.signPub));
     expect(req.encPub).toBe(b64.encode(device.encPub));
+  });
+
+  it('carries and signs the name of an invited person', () => {
+    const { brain, bundle } = makeBundle();
+    const code = newPairingCode();
+    const { blob } = createPairRequest({ identity: generateIdentity(), role: 'client', name: 'phone', userName: 'Masha', code, bundle });
+    expect(openPairRequest({ brain, code, blob }).userName).toBe('Masha');
+    // Requests from devices that predate userName still verify: the transcript only grows when the field is present.
+    const old = createPairRequest({ identity: generateIdentity(), role: 'client', name: 'phone', code, bundle });
+    expect(openPairRequest({ brain, code, blob: old.blob }).userName).toBeUndefined();
   });
 
   it('throws with a different code', () => {
