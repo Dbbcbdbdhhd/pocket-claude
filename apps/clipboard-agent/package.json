@@ -8,6 +8,7 @@
     "build:exe": "bash scripts/build-exe.sh"
   },
   "dependencies": {
+    "@pocket/client-core": "workspace:*",
     "@pocket/protocol": "workspace:*",
     "@pocket/transport": "workspace:*",
     "ws": "^8.22.0"

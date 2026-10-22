@@ -60,6 +60,9 @@ importers:
 
   apps/clipboard-agent:
     dependencies:
+      '@pocket/client-core':
+        specifier: workspace:*
+        version: link:../../packages/client-core
       '@pocket/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
