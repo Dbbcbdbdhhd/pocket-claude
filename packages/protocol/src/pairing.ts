@@ -44,16 +44,17 @@ function pairingCodeFromBytes(bytes: Uint8Array): PairingCode {
   };
 }
 
-export function pairingUri(code: PairingCode, relayUrl: string): string {
-  return `pocketclaude://pair?code=${b64url.encode(code.bytes)}&relay=${encodeURIComponent(relayUrl)}`;
+/** `invite` marks a link that registers a new person: the phone asks for their name before joining. */
+export function pairingUri(code: PairingCode, relayUrl: string, opts: { invite?: boolean } = {}): string {
+  return `pocketclaude://pair?code=${b64url.encode(code.bytes)}&relay=${encodeURIComponent(relayUrl)}${opts.invite ? '&invite=1' : ''}`;
 }
 
-export function parsePairingUri(uri: string): { code: PairingCode; relayUrl: string } {
+export function parsePairingUri(uri: string): { code: PairingCode; relayUrl: string; invite: boolean } {
   const url = new URL(uri);
   const code = url.searchParams.get('code');
   const relay = url.searchParams.get('relay');
   if (url.protocol !== 'pocketclaude:' || !code || !relay) throw new Error('not a pairing link');
-  return { code: pairingCodeFromBytes(b64url.decode(code)), relayUrl: relay };
+  return { code: pairingCodeFromBytes(b64url.decode(code)), relayUrl: relay, invite: url.searchParams.get('invite') === '1' };
 }
 
 /** Shown on the brain and on the joining device so the user can detect a relay swapping the brain's keys. */
@@ -68,6 +69,8 @@ const pairRequestSchema = z.object({
   encPub: z.string(),
   role: roleSchema,
   name: z.string().max(64),
+  /** The person joining through an invite; the brain registers them under this name. */
+  userName: z.string().max(64).optional(),
   pairingId: z.string(),
   ts: z.number(),
   proof: z.string(),
@@ -78,13 +81,16 @@ export type PairRequest = z.infer<typeof pairRequestSchema>;
 const proofKey = (code: PairingCode) => hkdfSha256(code.bytes, 'pocket/v1', 'pair-proof');
 
 function requestTranscript(r: Omit<PairRequest, 'proof' | 'sig'>): Uint8Array {
-  return utf8(['pocket/v1/pair', r.deviceId, r.signPub, r.encPub, r.role, r.name, r.pairingId, r.ts].join('|'));
+  // userName is appended only when present so requests from older devices still verify.
+  const parts = ['pocket/v1/pair', r.deviceId, r.signPub, r.encPub, r.role, r.name, r.pairingId, r.ts, ...(r.userName !== undefined ? [r.userName] : [])];
+  return utf8(parts.join('|'));
 }
 
 export function createPairRequest(args: {
   identity: Identity;
   role: Exclude<Role, 'brain'>;
   name: string;
+  userName?: string;
   code: PairingCode;
   bundle: PairingBundle;
 }): { deviceId: string; blob: string } {
@@ -95,6 +101,7 @@ export function createPairRequest(args: {
     encPub: b64.encode(args.identity.encPub),
     role: args.role,
     name: args.name,
+    ...(args.userName !== undefined ? { userName: args.userName } : {}),
     pairingId: args.code.pairingId,
     ts: Date.now(),
   };

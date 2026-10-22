@@ -39,6 +39,8 @@ export async function joinAccount(args: {
   code: PairingCode;
   role: Exclude<Role, 'brain'>;
   name: string;
+  /** Registers a new person under this name when joining through an invite. */
+  userName?: string;
   identity?: Identity;
   confirmSafetyNumber?: (safetyNumber: string) => Promise<boolean>;
   WebSocket?: WebSocketCtor;
@@ -50,7 +52,7 @@ export async function joinAccount(args: {
     throw new Error('Safety number rejected');
   }
   const identity = args.identity ?? generateIdentity();
-  const { deviceId, blob } = createPairRequest({ identity, role: args.role, name: args.name, code: args.code, bundle });
+  const { deviceId, blob } = createPairRequest({ identity, role: args.role, name: args.name, userName: args.userName, code: args.code, bundle });
 
   const Ctor = args.WebSocket ?? (globalThis.WebSocket as WebSocketCtor);
   const ws = new Ctor(toWsUrl(args.relayUrl, relayPaths.pairingSocket(args.code.pairingId)));
