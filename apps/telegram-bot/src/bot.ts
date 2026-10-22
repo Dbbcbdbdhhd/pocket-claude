@@ -29,6 +29,8 @@ interface Turn {
   text: string;
   /** Thread length when the message was sent; the echo of our message appears after this. */
   baseLen: number;
+  /** Index of the echoed user message once seen, so two identical messages never share one reply. */
+  echoAt?: number;
   stream: ReplyStream;
   sawRunning: boolean;
   done: boolean;
@@ -497,7 +499,7 @@ export class PocketBot {
     if (s.lastError && s.lastError !== l.lastError) {
       l.lastError = s.lastError;
       // The brain refused something; the message that caused it is the turn still waiting for its echo.
-      const waiting = l.turns.find((turn) => !turn.done && !this.turnItems(turn, s));
+      const waiting = l.turns.find((turn) => !turn.done && !this.turnItems(turn, s, l));
       if (waiting) {
         waiting.done = true;
         l.client.clearError();
@@ -514,7 +516,7 @@ export class PocketBot {
       }
       const session = s.sessions.find((x) => x.sessionId === turn.sessionId);
       if (session && session.state !== 'idle') turn.sawRunning = true;
-      const items = this.turnItems(turn, s);
+      const items = this.turnItems(turn, s, l);
       if (!items) continue;
       const ended = items.ended || items.items.some((i) => i.type === 'result' || i.type === 'error') || (turn.sawRunning && session?.state === 'idle');
       turn.done = ended;
@@ -537,10 +539,17 @@ export class PocketBot {
   }
 
   /** The items of a turn, or undefined until the brain has echoed our message. */
-  private turnItems(turn: Turn, s: ChatState): { items: ChatItem[]; ended: boolean } | undefined {
+  private turnItems(turn: Turn, s: ChatState, l?: Linked): { items: ChatItem[]; ended: boolean } | undefined {
     const thread = s.threads[turn.sessionId] ?? [];
-    const start = thread.findIndex((it, i) => i >= turn.baseLen && it.type === 'user' && it.text === turn.text);
-    if (start < 0) return undefined;
+    if (turn.echoAt === undefined) {
+      // Echoes already claimed by earlier turns of the same chat are skipped, so repeated texts line up in order.
+      const claimed = new Set(l?.turns.filter((t) => t !== turn && t.sessionId === turn.sessionId && t.echoAt !== undefined).map((t) => t.echoAt));
+      const at = thread.findIndex((it, i) => i >= turn.baseLen && it.type === 'user' && it.text === turn.text && !claimed.has(i));
+      if (at < 0) return undefined;
+      turn.echoAt = at;
+    }
+    const start = turn.echoAt;
+    if (thread[start]?.type !== 'user') return undefined;
     const rest = thread.slice(start + 1);
     const next = rest.findIndex((it) => it.type === 'user');
     return next < 0 ? { items: rest, ended: false } : { items: rest.slice(0, next), ended: true };

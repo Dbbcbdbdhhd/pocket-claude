@@ -258,6 +258,22 @@ describe('chat with Claude from Telegram', () => {
     expect(tg.lastText()).toBe('Stopped.');
     await until('session.interrupt', () => brain.received.find((r) => r.message.type === 'session.interrupt'));
 
+    // Two identical messages in a row each get their own reply, in order.
+    await bot.bot.handleUpdate(text('again'));
+    await bot.bot.handleUpdate(text('again'));
+    await until('two sends', () => (brain.received.filter((r) => r.message.type === 'message.send' && r.message.payload.text === 'again').length === 2 ? true : undefined));
+    const placeholders = tg.of('sendMessage').filter((c) => c.payload.text === '… ▍').map((c) => c).length;
+    expect(placeholders).toBeGreaterThanOrEqual(2);
+    const firstReply = tg.lastSentId() - 1;
+    const secondReply = tg.lastSentId();
+    brain.emit(sessionId, { kind: 'text', text: 'first answer' });
+    brain.emit(sessionId, { kind: 'result' });
+    await until('first answer', () => (tg.of('editMessageText').some((c) => c.payload.message_id === firstReply && c.payload.text === 'first answer') ? true : undefined));
+    expect(tg.of('editMessageText').some((c) => c.payload.message_id === secondReply)).toBe(false);
+    brain.emit(sessionId, { kind: 'text', text: 'second answer' });
+    brain.emit(sessionId, { kind: 'result' });
+    await until('second answer', () => (tg.of('editMessageText').some((c) => c.payload.message_id === secondReply && c.payload.text === 'second answer') ? true : undefined));
+
     // The Mac refusing a message shows up in place of the reply.
     brain.setReject('Add a computer first');
     await bot.bot.handleUpdate(text('anyone there?'));
