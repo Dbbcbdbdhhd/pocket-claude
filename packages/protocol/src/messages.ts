@@ -177,6 +177,10 @@ export const innerMessageBodySchema = z.discriminatedUnion('type', [
   m('computer.remove', z.object({ deviceId: z.string() })),
   /** Owner only: asks for an invite link that registers a new person with their own phone, computers and chats. */
   m('user.invite', z.object({})),
+  /** Asks for a link that connects the Mac's Telegram bot to this person; answered with `telegram.linking`. */
+  m('telegram.link', z.object({})),
+  /** The sending device leaves the account: the brain forgets it. */
+  m('device.unpair', z.object({})),
 
   // brain → client
   m('host.status', z.object({
@@ -187,6 +191,8 @@ export const innerMessageBodySchema = z.discriminatedUnion('type', [
     workspaces: z.array(z.string()),
     /** Who this client belongs to. Owners may work on the Mac itself and invite people. */
     user: z.object({ id: z.string(), name: z.string(), owner: z.boolean() }).optional(),
+    /** Username of the Telegram bot set up on the Mac, when there is one. */
+    telegramBot: z.string().optional(),
   })),
   m('session.created', z.object({ session: sessionMetaSchema })),
   m('session.list.result', z.object({ sessions: z.array(sessionMetaSchema) })),
@@ -212,6 +218,8 @@ export const innerMessageBodySchema = z.discriminatedUnion('type', [
   })),
   m('computer.pairing', z.object({ code: z.string(), safetyNumber: z.string(), expiresAt: z.number() })),
   m('user.invitation', z.object({ uri: z.string(), code: z.string(), safetyNumber: z.string(), expiresAt: z.number() })),
+  /** `url` opens the bot with the pairing code as its start parameter. */
+  m('telegram.linking', z.object({ url: z.string(), code: z.string(), expiresAt: z.number() })),
   m('clipboard.result', z.object({ requestId: z.string(), deviceId: z.string(), items: z.array(clipboardItemSchema).optional(), error: z.string().optional() })),
   m('clipboard.written', z.object({ requestId: z.string(), deviceId: z.string(), error: z.string().optional() })),
   m('activity.result', z.object({
