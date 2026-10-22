@@ -1,6 +1,7 @@
 /** Bot texts. Telegram tells us each user's language; Russian speakers get Russian, everyone else English. */
 export interface Strings {
-  buttons: { read: string; text: string; photo: string; pc: string; status: string };
+  buttons: { read: string; text: string; photo: string; chats: string; pc: string; status: string };
+  commands: { new: string; chats: string; stop: string; status: string; pc: string; unlink: string; help: string };
   notLinked: string;
   badCode: string;
   linking: string;
@@ -20,12 +21,32 @@ export interface Strings {
   pcSet: (pc: string) => string;
   failed: (reason: string) => string;
   notCopied: string;
+  noChat: string;
+  newChat: (title: string) => string;
+  nowIn: (title: string) => string;
+  chats: string;
+  noChats: string;
+  newChatButton: string;
+  stopped: string;
+  nothingRunning: string;
+  waiting: string;
+  emptyReply: string;
+  macWentOffline: string;
+  permission: (tool: string) => string;
+  allow: string;
+  allowSession: string;
+  deny: string;
+  allowed: string;
+  allowedSession: string;
+  denied: string;
+  resolvedElsewhere: string;
   status: (s: { user: string; owner: boolean; macOnline: boolean; claude: string | undefined; computers: { name: string; online: boolean; current: boolean; clipboard: boolean }[] }) => string;
   help: string;
 }
 
 const en: Strings = {
-  buttons: { read: '📋 Clipboard → here', text: '📥 Text → clipboard', photo: '🖼 Photo → clipboard', pc: '🖥 Computer', status: 'ℹ️ Status' },
+  buttons: { read: '📋 Clipboard → here', text: '📥 Text → clipboard', photo: '🖼 Photo → clipboard', chats: '💬 Chats', pc: '🖥 Computer', status: 'ℹ️ Status' },
+  commands: { new: 'New chat with Claude', chats: 'Pick a chat', stop: 'Stop the current reply', status: 'Mac and computers', pc: 'Pick the clipboard computer', unlink: 'Unlink this Telegram account', help: 'What the buttons do' },
   notLinked: 'This bot is not linked to your Pocket yet.\nOn the phone open Settings → Telegram → Link, then tap the link it opens.',
   badCode: 'That link has expired or is not a Pocket link. Make a new one on the phone: Settings → Telegram → Link.',
   linking: 'Linking with the Mac…',
@@ -45,6 +66,25 @@ const en: Strings = {
   pcSet: (pc) => `Using ${pc}.`,
   failed: (reason) => `Did not work: ${reason}`,
   notCopied: 'Not copied: the computer did not answer.',
+  noChat: 'No chat yet. /new starts a chat with Claude; to copy text to the PC tap “📥 Text → clipboard” first.',
+  newChat: (title) => `New chat: ${title}. Write to Claude here.`,
+  nowIn: (title) => `Chat: ${title}`,
+  chats: 'Your chats',
+  noChats: 'No chats yet.',
+  newChatButton: '➕ New chat',
+  stopped: 'Stopped.',
+  nothingRunning: 'Nothing is running.',
+  waiting: '…',
+  emptyReply: '(no reply)',
+  macWentOffline: 'The Mac went offline.',
+  permission: (tool) => `🔐 Claude wants to run ${tool}:`,
+  allow: '✅ Allow',
+  allowSession: '✅ Always in this chat',
+  deny: '❌ Deny',
+  allowed: '✅ Allowed',
+  allowedSession: '✅ Allowed for this chat',
+  denied: '❌ Denied',
+  resolvedElsewhere: 'Answered on another device.',
   status: (s) =>
     [
       `You: ${s.user}${s.owner ? ' (owner)' : ''}`,
@@ -52,11 +92,12 @@ const en: Strings = {
       s.computers.length ? 'Computers:' : 'Computers: none',
       ...s.computers.map((c) => `  ${c.online ? '●' : '○'} ${c.name}${c.current ? ' ✓' : ''}${c.clipboard ? '' : ' (no clipboard)'}`),
     ].join('\n'),
-  help: 'Buttons below: get what is on the PC clipboard, or send me text or a photo to put it there. /status, /pc, /unlink.',
+  help: 'Buttons below: get what is on the PC clipboard, or put text and photos there. /new starts a chat with Claude; then plain messages and photos go to it. /chats, /stop, /status, /pc, /unlink.',
 };
 
 const ru: Strings = {
-  buttons: { read: '📋 Буфер → сюда', text: '📥 Текст → в буфер', photo: '🖼 Фото → в буфер', pc: '🖥 Компьютер', status: 'ℹ️ Статус' },
+  buttons: { read: '📋 Буфер → сюда', text: '📥 Текст → в буфер', photo: '🖼 Фото → в буфер', chats: '💬 Чаты', pc: '🖥 Компьютер', status: 'ℹ️ Статус' },
+  commands: { new: 'Новый чат с Claude', chats: 'Выбрать чат', stop: 'Остановить текущий ответ', status: 'Mac и компьютеры', pc: 'Выбрать компьютер для буфера', unlink: 'Отвязать этот Telegram', help: 'Что делают кнопки' },
   notLinked: 'Бот ещё не привязан к твоему Pocket.\nНа телефоне: Настройки → Telegram → Link, затем нажми на открывшуюся ссылку.',
   badCode: 'Ссылка устарела или это не ссылка Pocket. Сделай новую на телефоне: Настройки → Telegram → Link.',
   linking: 'Привязываю к Mac…',
@@ -76,6 +117,25 @@ const ru: Strings = {
   pcSet: (pc) => `Теперь ${pc}.`,
   failed: (reason) => `Не получилось: ${reason}`,
   notCopied: 'Не скопировано: компьютер не ответил.',
+  noChat: 'Чата ещё нет. /new начинает чат с Claude; чтобы положить текст в буфер ПК, сначала нажми «📥 Текст → в буфер».',
+  newChat: (title) => `Новый чат: ${title}. Пиши Claude сюда.`,
+  nowIn: (title) => `Чат: ${title}`,
+  chats: 'Твои чаты',
+  noChats: 'Чатов пока нет.',
+  newChatButton: '➕ Новый чат',
+  stopped: 'Остановлено.',
+  nothingRunning: 'Ничего не выполняется.',
+  waiting: '…',
+  emptyReply: '(без ответа)',
+  macWentOffline: 'Mac ушёл в офлайн.',
+  permission: (tool) => `🔐 Claude хочет выполнить ${tool}:`,
+  allow: '✅ Разрешить',
+  allowSession: '✅ Всегда в этом чате',
+  deny: '❌ Запретить',
+  allowed: '✅ Разрешено',
+  allowedSession: '✅ Разрешено для этого чата',
+  denied: '❌ Запрещено',
+  resolvedElsewhere: 'Решено на другом устройстве.',
   status: (s) =>
     [
       `Ты: ${s.user}${s.owner ? ' (владелец)' : ''}`,
@@ -83,7 +143,7 @@ const ru: Strings = {
       s.computers.length ? 'Компьютеры:' : 'Компьютеры: нет',
       ...s.computers.map((c) => `  ${c.online ? '●' : '○'} ${c.name}${c.current ? ' ✓' : ''}${c.clipboard ? '' : ' (без буфера)'}`),
     ].join('\n'),
-  help: 'Кнопки внизу: забрать то, что в буфере на ПК, или пришли текст/фото — положу туда. /status, /pc, /unlink.',
+  help: 'Кнопки внизу: забрать то, что в буфере на ПК, или положить туда текст и фото. /new начинает чат с Claude — дальше обычные сообщения и фото идут ему. /chats, /stop, /status, /pc, /unlink.',
 };
 
 export const STRINGS: Record<'en' | 'ru', Strings> = { en, ru };

@@ -28,6 +28,12 @@ let relay: Relay;
 let brain: InstanceType<typeof Brain>;
 const links: InstanceType<typeof DeviceLink>[] = [];
 
+/** The relay learns about a pairing from a frame on the brain's socket; give it a moment before fetching the bundle. */
+const published = async <T>(ticket: T): Promise<T> => {
+  await new Promise((r) => setTimeout(r, 50));
+  return ticket;
+};
+
 const until = <T>(what: string, fn: (resolve: (v: T) => void) => void, ms = 10_000) =>
   new Promise<T>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(`timeout waiting for ${what}`)), ms);
@@ -151,7 +157,7 @@ describe('PocketBot', () => {
     expect(tg.last()).toMatch(/expired or is not/);
 
     // The phone's Settings → Telegram → Link makes this code; the user taps t.me/<bot>?start=<code>.
-    const ticket = brain.startPairing(undefined, { userId: OWNER_ID });
+    const ticket = await published(brain.startPairing(undefined, { userId: OWNER_ID }));
     await bot.bot.handleUpdate(command('start', ticket.code));
     expect(tg.last()).toMatch(/^Linked as .+\nClipboard computer: masha-pc\./);
     expect(brain.status().devices.map((d) => d.name)).toContain('Telegram @masha');
@@ -173,15 +179,22 @@ describe('PocketBot', () => {
     await bot.bot.handleUpdate(text('📋 Clipboard → here'));
     expect(tg.last()).toMatch(/is empty/);
 
-    // Telegram → clipboard: plain text, a photo (downloaded through getFile), a non-image document is refused.
+    // Telegram → clipboard: after the button, text or a photo (downloaded through getFile); a PDF is refused.
+    await bot.bot.handleUpdate(text('📥 Text → clipboard'));
     await bot.bot.handleUpdate(text('paste me'));
     expect(tg.last()).toBe('Copied to masha-pc.');
     expect(pc.written).toEqual([{ kind: 'text', text: 'paste me' }]);
+    await bot.bot.handleUpdate(text('🖼 Фото → в буфер'));
     await bot.bot.handleUpdate(message({ photo: [{ file_id: 'small', file_unique_id: 's', width: 10, height: 10 }, { file_id: 'big', file_unique_id: 'b', width: 100, height: 100 }] }));
     expect(downloads).toEqual(['photos/big.jpg']);
     expect(pc.written[1]).toEqual({ kind: 'image', mime: 'image/jpeg', dataBase64: Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString('base64') });
+    await bot.bot.handleUpdate(text('🖼 Photo → clipboard'));
     await bot.bot.handleUpdate(message({ document: { file_id: 'd', file_unique_id: 'd', mime_type: 'application/pdf', file_name: 'a.pdf' } }));
     expect(tg.last()).toMatch(/Only text and pictures/);
+    expect(pc.written).toHaveLength(2);
+    // Without the button and without a chat, plain text is neither copied nor sent anywhere.
+    await bot.bot.handleUpdate(text('just talking'));
+    expect(tg.last()).toMatch(/No chat yet/);
     expect(pc.written).toHaveLength(2);
 
     // Status and the computer picker.
@@ -211,11 +224,12 @@ describe('PocketBot', () => {
   });
 
   it('reconnects saved links on start and tells phones about the bot', async () => {
-    const ticket = brain.startPairing(undefined, { userId: OWNER_ID });
+    const ticket = await published(brain.startPairing(undefined, { userId: OWNER_ID }));
     const store = memoryStore();
     const first = new PocketBot({ token: '1:test', relayUrl: relay.url, store, log: () => {}, WebSocket: WS, botInfo: ME });
-    fakeTelegram(first);
+    const tg1 = fakeTelegram(first);
     await first.bot.handleUpdate(command('start', ticket.code));
+    expect(tg1.last()).toMatch(/^Linked as/);
     await first.stop();
 
     const second = new PocketBot({ token: '1:test', relayUrl: relay.url, store, log: () => {}, WebSocket: WS, botInfo: ME });
