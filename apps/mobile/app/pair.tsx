@@ -1,4 +1,4 @@
-import { parsePairingUri } from '@pocket/protocol';
+import { parsePairingUri, type PairingCode } from '@pocket/protocol';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams } from 'expo-router';
@@ -12,12 +12,15 @@ import { colors, mono, radius, space } from '../src/theme';
 export default function PairScreen() {
   const insets = useSafeAreaInsets();
   const { pair } = useSession();
-  const params = useLocalSearchParams<{ code?: string; relay?: string }>();
+  const params = useLocalSearchParams<{ code?: string; relay?: string; invite?: string }>();
   const [permission, requestPermission] = useCameraPermissions();
   const [mode, setMode] = useState<'scan' | 'paste'>('scan');
   const [link, setLink] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** An invite link was read; the person picks a name before joining. */
+  const [invite, setInvite] = useState<{ relayUrl: string; code: PairingCode } | null>(null);
+  const [userName, setUserName] = useState('');
   const handling = useRef(false);
 
   const join = useCallback(
@@ -28,6 +31,13 @@ export default function PairScreen() {
       setError(null);
       try {
         const parsed = parsePairingUri(uri.trim());
+        if (parsed.invite) {
+          setInvite({ relayUrl: parsed.relayUrl, code: parsed.code });
+          setBusy(false);
+          handling.current = false;
+          void Haptics.selectionAsync();
+          return;
+        }
         await pair(parsed);
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       } catch (e) {
@@ -40,13 +50,64 @@ export default function PairScreen() {
     [pair],
   );
 
+  const register = useCallback(async () => {
+    const name = userName.trim();
+    if (!invite || !name || handling.current) return;
+    handling.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      await pair({ ...invite, userName: name });
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (e) {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setError(e instanceof Error ? e.message : 'Pairing failed');
+      setBusy(false);
+      handling.current = false;
+    }
+  }, [invite, userName, pair]);
+
   useEffect(() => {
     if (params.code && params.relay) {
-      void join(`pocketclaude://pair?code=${params.code}&relay=${encodeURIComponent(params.relay)}`);
+      void join(`pocketclaude://pair?code=${params.code}&relay=${encodeURIComponent(params.relay)}${params.invite ? '&invite=1' : ''}`);
     }
-  }, [params.code, params.relay, join]);
+  }, [params.code, params.relay, params.invite, join]);
 
   const showCamera = mode === 'scan' && permission?.granted === true && !busy;
+
+  if (invite) {
+    const ready = userName.trim().length > 0 && !busy;
+    return (
+      <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView
+          contentContainerStyle={[styles.content, { paddingTop: insets.top + space.xl, paddingBottom: insets.bottom + space.xl }]}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Wordmark size={64} style={styles.wordmark} />
+          <Text style={styles.subtitle}>You have been invited. Your chats and computers will be yours alone.</Text>
+          <TextInput
+            style={styles.name}
+            value={userName}
+            onChangeText={setUserName}
+            placeholder="Your name"
+            placeholderTextColor={colors.textMuted}
+            autoFocus
+            maxLength={64}
+            returnKeyType="done"
+            onSubmitEditing={() => void register()}
+            selectionColor={colors.accent}
+          />
+          <Pressable disabled={!ready} onPress={() => void register()} style={({ pressed }) => [styles.primary, !ready && { opacity: 0.4 }, pressed && { opacity: 0.8 }]}>
+            {busy ? <ActivityIndicator color={colors.userText} /> : <Text style={styles.primaryText}>Join</Text>}
+          </Pressable>
+          <Pressable disabled={busy} onPress={() => setInvite(null)} hitSlop={8}>
+            <Text style={styles.link}>Scan a different code</Text>
+          </Pressable>
+          {error && <Text style={styles.error}>{error}</Text>}
+        </ScrollView>
+      </KeyboardAvoidingView>
+    );
+  }
 
   return (
     <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -55,7 +116,7 @@ export default function PairScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <Wordmark size={64} style={styles.wordmark} />
-        <Text style={styles.subtitle}>Run <Text style={styles.code}>pocket-claude pair</Text> on your Mac and scan the QR code.</Text>
+        <Text style={styles.subtitle}>Run <Text style={styles.code}>pocket-claude pair</Text> on your Mac and scan the QR code, or scan an invite from someone.</Text>
 
         <View style={styles.tabs}>
           {(['scan', 'paste'] as const).map((m) => (
@@ -165,5 +226,16 @@ const styles = StyleSheet.create({
   },
   primary: { backgroundColor: colors.accent, borderRadius: 8, alignItems: 'center', justifyContent: 'center', height: 44 },
   primaryText: { color: colors.userText, fontWeight: '600', fontSize: 15 },
+  name: {
+    height: 48,
+    backgroundColor: colors.surface,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderHi,
+    paddingHorizontal: space.lg,
+    color: colors.text,
+    fontSize: 16,
+  },
+  link: { color: colors.accent, fontSize: 14, fontWeight: '600', textAlign: 'center', paddingVertical: space.sm },
   error: { color: colors.danger, fontSize: 14, lineHeight: 20 },
 });

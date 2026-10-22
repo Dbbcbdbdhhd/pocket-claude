@@ -2,11 +2,12 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import type { ReactNode } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { useEffect } from 'react';
+import { Alert, Pressable, ScrollView, Share, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { IconName } from '../src/format';
 import { useLock } from '../src/lock';
-import { useSession } from '../src/session';
+import { useChatState, useSession } from '../src/session';
 import { colors, mono } from '../src/theme';
 
 function Section({ title }: { title: string }) {
@@ -51,13 +52,30 @@ export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { credentials, client, unpair } = useSession();
+  const state = useChatState();
   const lock = useLock();
+  const user = state.host?.user;
+  const owner = user?.owner !== false;
+
+  const invite = () => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    client?.invite();
+  };
+
+  useEffect(() => {
+    const invitation = state.invitation;
+    if (!invitation || !client) return;
+    client.clearInvitation();
+    void Share.share({
+      message: `Join my Pocket: open the app, choose "Paste link" and paste this (valid 5 minutes)\n${invitation.uri}`,
+    }).catch(() => {});
+  }, [state.invitation, client]);
 
   const stopEverything = () =>
-    Alert.alert('Stop everything?', 'Kills all Claude processes on the Mac and all running commands on the Windows laptop.', [
+    Alert.alert(owner ? 'Stop everything?' : 'Stop your chats?', owner ? 'Kills all Claude processes on the Mac and all running commands on the Windows laptop.' : 'Kills your Claude chats and the commands running on your computers.', [
       { text: 'Cancel', style: 'cancel' },
       {
-        text: 'Stop everything',
+        text: owner ? 'Stop everything' : 'Stop my chats',
         style: 'destructive',
         onPress: () => {
           void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
@@ -81,6 +99,18 @@ export default function SettingsScreen() {
         <Text style={styles.title}>Settings and activity</Text>
       </View>
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}>
+        <Section title="You" />
+        <Row icon="person-outline" label={user?.name ?? '—'} hint={user ? (user.owner ? 'Owner of the Mac' : 'Invited by the owner') : 'Waiting for the Mac'} />
+        {owner ? (
+          <Row
+            icon="person-add-outline"
+            label="Invite a person"
+            hint="They get their own chats and computers on your Mac"
+            tint={colors.accent}
+            onPress={state.brainOnline ? invite : undefined}
+          />
+        ) : null}
+
         <Section title="Connection" />
         <Row icon="cloud-outline" label="Relay" value={credentials?.relayUrl ?? '—'} />
         <Row icon="person-circle-outline" label="Account" value={credentials?.accountId ?? '—'} />

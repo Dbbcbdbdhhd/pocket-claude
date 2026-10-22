@@ -143,7 +143,9 @@ export default function ComputersScreen() {
   const hasTools = (c: Computer) => !c.capabilities || c.capabilities.includes('tools');
   const toolComputers = state.computers.filter(hasTools);
   const clipboardComputers = state.computers.filter((c) => c.capabilities?.includes('clipboard'));
-  const workOn = session?.executorId && toolComputers.some((c) => c.deviceId === session.executorId) ? session.executorId : MAC_DEVICE_ID;
+  // Only the Mac's owner may work on the Mac itself; other people's chats default to their first computer.
+  const canUseMac = state.host?.user?.owner !== false;
+  const workOn = session?.executorId && toolComputers.some((c) => c.deviceId === session.executorId) ? session.executorId : canUseMac ? MAC_DEVICE_ID : (toolComputers[0]?.deviceId ?? null);
   const currentProject = session?.project ?? null;
   const sameProject = (p: Project) => currentProject !== null && currentProject.toLowerCase() === p.path.toLowerCase();
   const allMacProjects = state.mac?.projects ?? [];
@@ -202,29 +204,34 @@ export default function ComputersScreen() {
         {session ? (
           <View style={styles.projects}>
             <Text style={styles.section}>This chat works on</Text>
-            <View style={[styles.row, workOn === MAC_DEVICE_ID && styles.rowOn]}>
-              <View style={styles.icon}>
-                <Ionicons name="laptop-outline" size={22} color={colors.text} />
-                <View style={[styles.dot, { backgroundColor: macOnline ? colors.ok : colors.textMuted }]} />
-              </View>
-              <View style={{ flex: 1, gap: 2 }}>
-                <Text style={styles.name}>{state.mac?.name ?? 'Mac'}</Text>
-                <Text style={styles.meta}>Claude works here with its own tools</Text>
-              </View>
-            </View>
-            <ProjectRow
-              project={null}
-              defaultLabel="pocket-workspace (default)"
-              current={workOn === MAC_DEVICE_ID && currentProject === null}
-              onPick={() => pickWorkspace(MAC_DEVICE_ID, null)}
-            />
-            {macProjects.map((p) => (
-              <ProjectRow key={p.path} project={p} current={workOn === MAC_DEVICE_ID && sameProject(p)} onPick={() => pickWorkspace(MAC_DEVICE_ID, p)} />
-            ))}
-            {allMacProjects.length > macProjects.length || showAll ? (
-              <Pressable onPress={() => setShowAll((v) => !v)} hitSlop={6}>
-                <Text style={styles.more}>{showAll ? 'Show fewer' : `Show all ${allMacProjects.length} projects`}</Text>
-              </Pressable>
+            {!canUseMac && toolComputers.length === 0 ? <Text style={styles.empty}>Add a computer with VS Code below: your chats work on your own computer.</Text> : null}
+            {canUseMac ? (
+              <>
+                <View style={[styles.row, workOn === MAC_DEVICE_ID && styles.rowOn]}>
+                  <View style={styles.icon}>
+                    <Ionicons name="laptop-outline" size={22} color={colors.text} />
+                    <View style={[styles.dot, { backgroundColor: macOnline ? colors.ok : colors.textMuted }]} />
+                  </View>
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={styles.name}>{state.mac?.name ?? 'Mac'}</Text>
+                    <Text style={styles.meta}>Claude works here with its own tools</Text>
+                  </View>
+                </View>
+                <ProjectRow
+                  project={null}
+                  defaultLabel="pocket-workspace (default)"
+                  current={workOn === MAC_DEVICE_ID && currentProject === null}
+                  onPick={() => pickWorkspace(MAC_DEVICE_ID, null)}
+                />
+                {macProjects.map((p) => (
+                  <ProjectRow key={p.path} project={p} current={workOn === MAC_DEVICE_ID && sameProject(p)} onPick={() => pickWorkspace(MAC_DEVICE_ID, p)} />
+                ))}
+                {allMacProjects.length > macProjects.length || showAll ? (
+                  <Pressable onPress={() => setShowAll((v) => !v)} hitSlop={6}>
+                    <Text style={styles.more}>{showAll ? 'Show fewer' : `Show all ${allMacProjects.length} projects`}</Text>
+                  </Pressable>
+                ) : null}
+              </>
             ) : null}
 
             {toolComputers.map((c) => (
