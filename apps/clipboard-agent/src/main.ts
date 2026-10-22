@@ -9,6 +9,9 @@ import { joinAccount, type WebSocketCtor } from '@pocket/transport';
 import WebSocket from 'ws';
 import { ClipboardAgent, type AgentState } from './agent.js';
 import { macClipboard, windowsClipboard } from './clipboard.js';
+import { OverlayModel } from './overlay/model.js';
+import { OVERLAY_PS } from './overlay/script.js';
+import { OverlayWindow } from './overlay/window.js';
 
 const WS = WebSocket as unknown as WebSocketCtor;
 const DEFAULT_RELAY = 'https://macbook-pro-dmitrij.taild47d20.ts.net:10000';
@@ -20,6 +23,7 @@ const files = {
   log: path.join(home, 'agent.log'),
   exe: path.join(home, `${APP}.exe`),
   vbs: path.join(home, 'start-hidden.vbs'),
+  overlay: path.join(home, 'overlay.ps1'),
 };
 const user = (os.userInfo().username || 'user').replace(/[^\w.-]/g, '_');
 const pipe = win ? `\\\\.\\pipe\\pocket-clipboard-${user}` : path.join(os.tmpdir(), `pocket-clipboard-${user}.sock`);
@@ -48,8 +52,11 @@ function saveState(state: AgentState): void {
   renameSync(`${files.state}.tmp`, files.state);
 }
 
+/** The overlay exists on Windows only; there it is on unless switched off. */
+const overlayWanted = (state: AgentState) => win && state.overlay !== false;
+
 /** Asks the running background copy to do something; resolves undefined if none is running. */
-function control(cmd: 'quit' | 'status'): Promise<string | undefined> {
+function control(cmd: 'quit' | 'status' | 'overlay on' | 'overlay off'): Promise<string | undefined> {
   return new Promise((resolve) => {
     const s = net.createConnection(pipe);
     let out = '';
@@ -102,13 +109,36 @@ async function run(): Promise<void> {
   }
   if (!win) rmSync(pipe, { force: true });
   let agent: ClipboardAgent | undefined;
+  let overlay: { model: OverlayModel; window: OverlayWindow } | undefined;
+  const startOverlay = () => {
+    if (overlay || !win) return;
+    writeFileSync(files.overlay, OVERLAY_PS);
+    const model = new OverlayModel({ window: (op) => void overlay?.window.send(op), request: (body) => agent?.request(body) });
+    const window = new OverlayWindow({ script: files.overlay, snapshot: () => model.snapshot(), log });
+    overlay = { model, window };
+    window.start();
+    agent?.setOverlay(model);
+  };
+  const stopOverlay = () => {
+    if (!overlay) return;
+    agent?.setOverlay(undefined);
+    overlay.window.close();
+    overlay = undefined;
+  };
   const server = net.createServer((s) => {
     s.on('data', (d) => {
       const cmd = d.toString().trim();
-      if (cmd === 'status') s.end(`running, paired with account ${state.accountId}\n`);
+      if (cmd === 'status') s.end(`running, paired with account ${state.accountId}, overlay ${overlay ? 'on' : 'off'}\n`);
       if (cmd === 'quit') {
         s.end('bye\n');
         shutdown();
+      }
+      if (cmd === 'overlay on' || cmd === 'overlay off') {
+        state.overlay = cmd === 'overlay on';
+        saveState(state);
+        if (state.overlay) startOverlay();
+        else stopOverlay();
+        s.end(`overlay ${overlay ? 'on' : 'off'}\n`);
       }
     });
     s.on('error', () => {});
@@ -128,8 +158,9 @@ async function run(): Promise<void> {
         log(`relay moved to ${url}`);
       },
     });
+    if (overlayWanted(state)) startOverlay();
     agent.connect();
-    log(`started (${process.pid})`);
+    log(`started (${process.pid}${overlay ? ', overlay on' : ''})`);
   });
   const persist = setInterval(() => {
     if (!agent) return;
@@ -138,6 +169,7 @@ async function run(): Promise<void> {
   }, 30_000);
   const shutdown = () => {
     clearInterval(persist);
+    stopOverlay();
     if (agent) {
       state.replay = agent.replayState();
       saveState(state);
@@ -214,8 +246,19 @@ async function main(): Promise<void> {
     case 'status':
       console.log((await control('status')) ?? (loadState() ? 'Paired, not running.' : 'Not paired.'));
       return;
+    case 'overlay': {
+      const on = args()[1];
+      const state = loadState();
+      if (on !== 'on' && on !== 'off') return console.log('Usage: PocketClipboard.exe overlay on|off');
+      if (!state) return console.log('Not paired.');
+      state.overlay = on === 'on';
+      saveState(state);
+      const applied = await control(`overlay ${on}`);
+      console.log(`Overlay ${on}.${applied ? '' : ' Applies when the agent starts.'}`);
+      return;
+    }
     default:
-      console.log('Usage: PocketClipboard.exe [install | pair | run | status | stop | uninstall]');
+      console.log('Usage: PocketClipboard.exe [install | pair | run | status | stop | uninstall | overlay on|off]');
   }
 }
 

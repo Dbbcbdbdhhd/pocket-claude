@@ -11,11 +11,21 @@ export interface AgentState {
   deviceId: string;
   identity: SerializedIdentity;
   replay: Record<string, number>;
+  /** Show AI replies in the overlay window; unset means on (Windows only). */
+  overlay?: boolean;
+}
+
+/** What the overlay window needs from the agent: the brain's session traffic and its presence. */
+export interface OverlaySink {
+  connected(): void;
+  offline(): void;
+  handle(message: InnerMessageBody): void;
 }
 
 /** Shares this computer's clipboard with the paired Mac and nothing else: no files, no commands. */
 export class ClipboardAgent {
   private readonly link: DeviceLink;
+  private overlay: OverlaySink | undefined;
 
   constructor(
     private readonly state: AgentState,
@@ -25,8 +35,10 @@ export class ClipboardAgent {
       log: (m: string) => void;
       /** The relay moved; the caller persists the new address. */
       onRelayMoved: (url: string) => void;
+      overlay?: OverlaySink;
     },
   ) {
+    this.overlay = opts.overlay;
     this.link = new DeviceLink({
       relayUrl: state.relayUrl,
       accountId: state.accountId,
@@ -40,7 +52,11 @@ export class ClipboardAgent {
     });
     this.link.on('message', (m) => void this.onMessage(m));
     this.link.on('ready', (_r, online) => online.includes(state.brainDeviceId) && this.sendStatus());
-    this.link.on('presence', (id, online) => online && id === state.brainDeviceId && this.sendStatus());
+    this.link.on('presence', (id, online) => {
+      if (id !== state.brainDeviceId) return;
+      if (online) this.sendStatus();
+      else this.overlay?.offline();
+    });
   }
 
   connect(): void {
@@ -55,12 +71,25 @@ export class ClipboardAgent {
     return this.link.replayState();
   }
 
+  /** Switches the overlay on or off at runtime; the Mac learns about it through the capabilities. */
+  setOverlay(sink: OverlaySink | undefined): void {
+    this.overlay = sink;
+    if (this.link.isOnline(this.state.brainDeviceId)) this.sendStatus();
+  }
+
+  /** Read-only requests the overlay makes (session list, history); the brain ignores anything else from an executor. */
+  request(body: InnerMessageBody): void {
+    this.send(body);
+  }
+
   private send(body: InnerMessageBody): void {
     this.link.send(this.state.brainDeviceId, body);
   }
 
   private sendStatus(): void {
-    this.send({ type: 'executor.status', payload: { workspaces: [], os: `${os.platform()} ${os.release()}`, shell: 'none', capabilities: ['clipboard'] } });
+    const capabilities = ['clipboard', ...(this.overlay ? ['overlay'] : [])];
+    this.send({ type: 'executor.status', payload: { workspaces: [], os: `${os.platform()} ${os.release()}`, shell: 'none', capabilities } });
+    this.overlay?.connected();
   }
 
   private async onMessage({ from, message }: IncomingMessage): Promise<void> {
@@ -96,6 +125,14 @@ export class ClipboardAgent {
           this.link.setRelayUrl(message.payload.url);
           this.opts.onRelayMoved(message.payload.url);
         }
+        return;
+      case 'session.event':
+      case 'session.created':
+      case 'session.updated':
+      case 'session.deleted':
+      case 'session.list.result':
+      case 'session.history.result':
+        this.overlay?.handle(message);
         return;
       default:
         return;
