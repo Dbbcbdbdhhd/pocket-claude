@@ -38,7 +38,7 @@ import { ExecutorBridge } from './executor.js';
 import { log } from './log.js';
 import { PermissionBroker } from './permissions.js';
 import { Session } from './session.js';
-import { saveState, type BrainState, type PairedDevice, type UsageTotals } from './store.js';
+import { migrateState, OWNER_ID, saveState, type BrainState, type PairedDevice, type UsageTotals, type User } from './store.js';
 
 const MAX_LIVE_SESSIONS = 2;
 
@@ -58,6 +58,13 @@ export interface PairingTicket {
   uri: string;
   safetyNumber: string;
   expiresAt: number;
+  /** The code registers a new person instead of adding a device to an existing one. */
+  invite?: boolean;
+}
+
+export interface UserSummary extends User {
+  devices: (Pick<PairedDevice, 'deviceId' | 'role' | 'name'> & { online: boolean })[];
+  sessions: number;
 }
 
 export interface BrainStatus {
@@ -68,8 +75,17 @@ export interface BrainStatus {
   claudeVersion: string | null;
   executorOnline: boolean;
   workspaces: string[];
-  devices: (Pick<PairedDevice, 'deviceId' | 'role' | 'name'> & { online: boolean })[];
+  devices: (Pick<PairedDevice, 'deviceId' | 'role' | 'name'> & { online: boolean; user: string })[];
   sessions: SessionMeta[];
+}
+
+/** An open pairing code. `userId` is set once the code belongs to a person; invites get one when the first device joins. */
+interface OpenPairing {
+  code: PairingCode;
+  expiresAt: number;
+  onPaired?: (d: PairedDevice) => void;
+  userId?: string;
+  invite?: { name?: string };
 }
 
 export class Brain {
@@ -79,7 +95,7 @@ export class Brain {
   private readonly executor: ExecutorBridge;
   private readonly permissions: PermissionBroker;
   private readonly sessions = new Map<string, Session>();
-  private readonly pairings = new Map<string, { code: PairingCode; expiresAt: number; onPaired?: (d: PairedDevice) => void }>();
+  private readonly pairings = new Map<string, OpenPairing>();
   private readonly pendingDeltas = new Map<string, { text: string; timer: ReturnType<typeof setTimeout> }>();
   private claudeVersion: string | null = null;
   /** Clipboard requests waiting for a computer: requestId → the client that asked. */
@@ -92,6 +108,7 @@ export class Brain {
     private readonly state: BrainState,
     private readonly opts: { WebSocket?: WebSocketCtor; claudeOptions?: Partial<Options>; persist?: boolean } = {},
   ) {
+    migrateState(state);
     this.deviceId = deriveDeviceId(identity.signPub);
     this.accountId = deriveAccountId(identity.signPub);
     this.link = new DeviceLink({
@@ -112,8 +129,8 @@ export class Brain {
     });
     this.permissions = new PermissionBroker({
       isAllowedAlways: (tool, input) => isAllowedByRules(this.state.allowlist, tool, input),
-      request: (p) => this.toClients({ type: 'permission.request', payload: p }, 'permission'),
-      resolved: (requestId, decision, by) => this.toClients({ type: 'permission.resolved', payload: { requestId, decision, by } }),
+      request: (p) => this.toClients(this.userOfSession(p.sessionId), { type: 'permission.request', payload: p }, 'permission'),
+      resolved: (requestId, sessionId, decision, by) => this.toClients(this.userOfSession(sessionId), { type: 'permission.resolved', payload: { requestId, decision, by } }),
       waiting: (sessionId, waiting) => this.sessions.get(sessionId)?.setState(waiting ? 'waiting_permission' : 'running'),
     });
     for (const meta of state.sessions) {
@@ -138,7 +155,9 @@ export class Brain {
         this.broadcastComputers();
       } else if (online) {
         this.sendStatus(deviceId);
-        for (const p of this.permissions.outstanding()) this.link.send(deviceId, { type: 'permission.request', payload: p });
+        for (const p of this.permissions.outstanding()) {
+          if (this.userOfSession(p.sessionId) === device.userId) this.link.send(deviceId, { type: 'permission.request', payload: p });
+        }
       }
     });
   }
@@ -161,15 +180,64 @@ export class Brain {
       relayUrl: this.publicRelayUrl,
       relayConnected: this.link.isReady,
       claudeVersion: this.claudeVersion,
-      executorOnline: this.executor.online(this.defaultExecutor()),
-      workspaces: this.executor.info(this.defaultExecutor())?.workspaces ?? [],
-      devices: this.state.devices.map((d) => ({ deviceId: d.deviceId, role: d.role, name: d.name, online: this.link.isOnline(d.deviceId) })),
+      executorOnline: this.executor.online(this.defaultExecutor(OWNER_ID)),
+      workspaces: this.executor.info(this.defaultExecutor(OWNER_ID))?.workspaces ?? [],
+      devices: this.state.devices.map((d) => ({ deviceId: d.deviceId, role: d.role, name: d.name, online: this.link.isOnline(d.deviceId), user: this.userName(d.userId) })),
       sessions: [...this.sessions.values()].map((s) => s.meta),
     };
   }
 
-  /** Issues a one-time code. The phone scans `uri`; the Windows executor types `code` and checks `safetyNumber`. */
-  startPairing(onPaired?: (d: PairedDevice) => void): PairingTicket {
+  users(): UserSummary[] {
+    return this.state.users.map((u) => ({
+      ...u,
+      devices: this.state.devices.filter((d) => d.userId === u.id).map((d) => ({ deviceId: d.deviceId, role: d.role, name: d.name, online: this.link.isOnline(d.deviceId) })),
+      sessions: this.sortedSessions(u.id).length,
+    }));
+  }
+
+  /** Removes a person with all their devices and chats. The owner cannot be removed. */
+  removeUser(idOrName: string): boolean {
+    const needle = idOrName.trim().toLowerCase();
+    const user = this.state.users.find((u) => !u.owner && (u.id === needle || u.name.toLowerCase() === needle));
+    if (!user) return false;
+    for (const d of this.state.devices.filter((d) => d.userId === user.id)) this.removeDevice(d.deviceId);
+    for (const s of [...this.sessions.values()].filter((s) => (s.meta.userId ?? OWNER_ID) === user.id)) {
+      for (const p of this.permissions.outstanding()) if (p.sessionId === s.id) this.permissions.respond(p.requestId, 'deny', 'removed');
+      s.destroy();
+      this.sessions.delete(s.id);
+    }
+    if (this.state.activeExecutors) delete this.state.activeExecutors[user.id];
+    this.state.users = this.state.users.filter((u) => u.id !== user.id);
+    this.persistNow();
+    log(`removed user "${user.name}" (${user.id})`);
+    return true;
+  }
+
+  private isOwner(userId: string): boolean {
+    return this.state.users.find((u) => u.id === userId)?.owner === true;
+  }
+
+  private userName(userId: string): string {
+    return this.state.users.find((u) => u.id === userId)?.name ?? userId;
+  }
+
+  private userOf(deviceId: string): string | undefined {
+    return this.state.devices.find((d) => d.deviceId === deviceId)?.userId;
+  }
+
+  private userOfSession(sessionId: string): string {
+    return this.sessions.get(sessionId)?.meta.userId ?? OWNER_ID;
+  }
+
+  private permissionSession(requestId: string): string | undefined {
+    return this.permissions.outstanding().find((p) => p.requestId === requestId)?.sessionId;
+  }
+
+  /**
+   * Issues a one-time code. The phone scans `uri`; the Windows executor types `code` and checks `safetyNumber`.
+   * Devices join the person in `userId` (the owner by default); an `invite` registers a new person with the first device.
+   */
+  startPairing(onPaired?: (d: PairedDevice) => void, opts: { userId?: string; invite?: { name?: string } } = {}): PairingTicket {
     if (!this.link.isReady) throw new Error('Not connected to the relay yet');
     const code = newPairingCode();
     const expiresAt = Date.now() + PAIRING_TTL_MS;
@@ -181,10 +249,11 @@ export class Brain {
       brainEncPub: b64.encode(this.identity.encPub),
       expiresAt,
     };
-    this.pairings.set(code.pairingId, { code, expiresAt, onPaired });
+    const invite = opts.invite !== undefined;
+    this.pairings.set(code.pairingId, { code, expiresAt, onPaired, ...(invite ? { invite: opts.invite } : { userId: opts.userId ?? OWNER_ID }) });
     this.link.sendControl({ t: 'pairing.publish', pairingId: code.pairingId, bundle });
     setTimeout(() => this.pairings.delete(code.pairingId), PAIRING_TTL_MS + 5_000);
-    return { code: code.display, uri: pairingUri(code, this.publicRelayUrl), safetyNumber: safetyNumber(bundle), expiresAt };
+    return { code: code.display, uri: pairingUri(code, this.publicRelayUrl, { invite }), safetyNumber: safetyNumber(bundle), expiresAt, ...(invite ? { invite } : {}) };
   }
 
   get publicRelayUrl(): string {
@@ -209,7 +278,7 @@ export class Brain {
     this.link.sendControl({ t: 'roster.remove', deviceId });
     if (device.role === 'executor') {
       this.executor.forget(deviceId);
-      if (this.state.activeExecutor === deviceId) delete this.state.activeExecutor;
+      for (const [userId, active] of Object.entries(this.state.activeExecutors ?? {})) if (active === deviceId) delete this.state.activeExecutors![userId];
       this.broadcastComputers();
       this.broadcastStatus();
     }
@@ -217,17 +286,23 @@ export class Brain {
     return true;
   }
 
-  private executorDevices(): PairedDevice[] {
-    return this.state.devices.filter((d) => d.role === 'executor');
+  /** Paired computers, optionally only one person's. */
+  private executorDevices(userId?: string): PairedDevice[] {
+    return this.state.devices.filter((d) => d.role === 'executor' && (userId === undefined || d.userId === userId));
   }
 
-  /** Default computer for the clipboard: the one picked last, else the first online one, else any. */
-  private defaultExecutor(): string | undefined {
-    const all = this.executorDevices();
-    if (all.some((d) => d.deviceId === this.state.activeExecutor)) return this.state.activeExecutor;
+  /** A person's default computer for the clipboard: the one picked last, else the first online one, else any. */
+  private defaultExecutor(userId: string): string | undefined {
+    const all = this.executorDevices(userId);
+    const active = this.state.activeExecutors?.[userId];
+    if (all.some((d) => d.deviceId === active)) return active;
     const clip = all.filter((d) => this.executor.info(d.deviceId)?.capabilities?.includes('clipboard'));
     const pool = clip.length ? clip : all;
     return (pool.find((d) => this.link.isOnline(d.deviceId)) ?? pool[0])?.deviceId;
+  }
+
+  private setActiveExecutor(userId: string, deviceId: string): void {
+    this.state.activeExecutors = { ...this.state.activeExecutors, [userId]: deviceId };
   }
 
   /** Old extensions don't report capabilities; they are tool executors. */
@@ -241,10 +316,21 @@ export class Brain {
     return !!this.executor.info(deviceId)?.capabilities?.includes('overlay');
   }
 
-  /** The computer a chat works on, or undefined for the Mac itself (the default). */
+  /**
+   * The computer a chat works on, or undefined for the Mac itself. Only the owner's chats work on the Mac:
+   * other people's chats fall back to their default computer, and run nowhere until they add one.
+   */
   private executorForSession(sessionId: string): string | undefined {
-    const chosen = this.sessions.get(sessionId)?.meta.executorId;
-    return chosen && this.executorDevices().some((d) => d.deviceId === chosen) && this.hasTools(chosen) ? chosen : undefined;
+    const s = this.sessions.get(sessionId);
+    if (!s) return undefined;
+    const userId = s.meta.userId ?? OWNER_ID;
+    const mine = this.executorDevices(userId);
+    const chosen = s.meta.executorId;
+    if (chosen && mine.some((d) => d.deviceId === chosen) && this.hasTools(chosen)) return chosen;
+    if (this.isOwner(userId)) return undefined;
+    const tools = mine.filter((d) => this.hasTools(d.deviceId)).sort((a, b) => a.pairedAt - b.pairedAt);
+    const active = this.state.activeExecutors?.[userId];
+    return (tools.find((d) => d.deviceId === active) ?? tools[0])?.deviceId;
   }
 
   private macProjects(): Project[] {
@@ -274,9 +360,9 @@ export class Brain {
     return [...out.values()].slice(0, 30);
   }
 
-  private computers(): PayloadOf<'computers.result'> {
+  private computers(userId: string): PayloadOf<'computers.result'> {
     return {
-      computers: this.executorDevices().map((d) => {
+      computers: this.executorDevices(userId).map((d) => {
         const info = this.executor.info(d.deviceId);
         return {
           deviceId: d.deviceId,
@@ -289,13 +375,17 @@ export class Brain {
           pairedAt: d.pairedAt,
         };
       }),
-      activeId: this.defaultExecutor() ?? null,
-      mac: { name: hostname().replace(/\.local$/, ''), projects: this.macProjects() },
+      activeId: this.defaultExecutor(userId) ?? null,
+      ...(this.isOwner(userId) ? { mac: { name: hostname().replace(/\.local$/, ''), projects: this.macProjects() } } : {}),
     };
   }
 
   private broadcastComputers(): void {
-    this.toClients({ type: 'computers.result', payload: this.computers() }, undefined, true);
+    for (const u of this.state.users) {
+      if (this.state.devices.some((d) => d.userId === u.id && d.role === 'client' && this.link.isOnline(d.deviceId))) {
+        this.toClients(u.id, { type: 'computers.result', payload: this.computers(u.id) }, undefined, true);
+      }
+    }
   }
 
   allowlist(): string[] {
@@ -317,11 +407,13 @@ export class Brain {
     return this.state.allowlist.length !== before;
   }
 
-  kill(): void {
-    log('kill switch');
-    this.permissions.denyAll();
-    this.executor.killAll();
-    for (const s of this.sessions.values()) s.stop();
+  /** Stops everything, or everything of one person. */
+  kill(userId?: string): void {
+    log(userId ? `kill switch for ${this.userName(userId)}` : 'kill switch');
+    const mine = (sessionId: string) => userId === undefined || this.userOfSession(sessionId) === userId;
+    for (const p of this.permissions.outstanding()) if (mine(p.sessionId)) this.permissions.respond(p.requestId, 'deny', 'kill-switch');
+    this.executor.killAll(userId === undefined ? undefined : this.executorDevices(userId).map((d) => d.deviceId));
+    for (const s of this.sessions.values()) if (mine(s.id)) s.stop();
   }
 
   private onControl(frame: RelayToDevice): void {
@@ -346,7 +438,16 @@ export class Brain {
       return;
     }
     if (request.deviceId !== deviceId) return;
-    for (const old of this.state.devices.filter((d) => d.role === request.role && d.name === request.name && d.deviceId !== request.deviceId)) {
+    if (pairing.userId === undefined) {
+      // First device through an invite: register the person. Later devices with the same code join them.
+      const name = (request.userName?.trim() || pairing.invite?.name?.trim() || request.name).slice(0, 64);
+      const user: User = { id: randomUUID().slice(0, 8), name, createdAt: Date.now() };
+      this.state.users.push(user);
+      pairing.userId = user.id;
+      log(`registered "${user.name}" (${user.id})`);
+    }
+    const userId = pairing.userId;
+    for (const old of this.state.devices.filter((d) => d.userId === userId && d.role === request.role && d.name === request.name && d.deviceId !== request.deviceId)) {
       this.removeDevice(old.deviceId);
     }
     const device: PairedDevice = {
@@ -356,6 +457,7 @@ export class Brain {
       signPub: request.signPub,
       encPub: request.encPub,
       pairedAt: Date.now(),
+      userId,
     };
     this.state.devices = [...this.state.devices.filter((d) => d.deviceId !== device.deviceId), device];
     this.persistNow();
@@ -363,7 +465,7 @@ export class Brain {
     this.link.sendControl({ t: 'roster.add', entry: { deviceId: device.deviceId, role: device.role, name: device.name, signPub: device.signPub } });
     const reply = sealPairReply({ ok: true, accountId: this.accountId, brainDeviceId: this.deviceId, roster: [] }, device.encPub);
     this.link.sendControl({ t: 'pair.reply', pairingId, deviceId, blob: reply });
-    log(`paired ${device.role} "${device.name}" (${device.deviceId})`);
+    log(`paired ${device.role} "${device.name}" (${device.deviceId}) for ${this.userName(userId)}`);
     if (device.role === 'executor') this.broadcastComputers();
     pairing.onPaired?.(device);
   }
@@ -399,11 +501,11 @@ export class Brain {
           this.broadcastComputers();
           return this.broadcastStatus();
         case 'session.list':
-          if (this.isOverlay(from)) this.link.send(from, { type: 'session.list.result', payload: { sessions: this.sortedSessions() } });
+          if (this.isOverlay(from)) this.link.send(from, { type: 'session.list.result', payload: { sessions: this.sortedSessions(device.userId) } });
           return;
         case 'session.history': {
           const s = this.isOverlay(from) ? this.sessions.get(message.payload.sessionId) : undefined;
-          if (s) this.link.send(from, { type: 'session.history.result', payload: { sessionId: s.id, events: s.history() } });
+          if (s && this.userOfSession(s.id) === device.userId) this.link.send(from, { type: 'session.history.result', payload: { sessionId: s.id, events: s.history() } });
           return;
         }
         default:
@@ -411,11 +513,20 @@ export class Brain {
       }
     }
 
+    // Everything below is scoped to the person this client belongs to.
+    const userId = device.userId;
+    const owner = this.isOwner(userId);
+    const mySession = (sessionId: string): Session | undefined => {
+      const s = this.sessions.get(sessionId);
+      return s && this.userOfSession(s.id) === userId ? s : undefined;
+    };
+    const myComputer = (deviceId: string) => this.executorDevices(userId).some((d) => d.deviceId === deviceId);
+
     switch (message.type) {
       case 'status.get':
         return this.sendStatus(from);
       case 'session.list':
-        this.link.send(from, { type: 'session.list.result', payload: { sessions: this.sortedSessions() } });
+        this.link.send(from, { type: 'session.list.result', payload: { sessions: this.sortedSessions(userId) } });
         return;
       case 'session.create': {
         const now = Date.now();
@@ -425,21 +536,23 @@ export class Brain {
           state: 'idle',
           createdAt: now,
           updatedAt: now,
+          userId,
         };
         this.sessions.set(meta.sessionId, new Session(meta, this.sessionHost(), false));
         this.schedulePersist();
-        this.toClients({ type: 'session.created', payload: { session: meta } });
+        this.toClients(userId, { type: 'session.created', payload: { session: meta } });
         return;
       }
       case 'session.history': {
-        const s = this.sessions.get(message.payload.sessionId);
+        const s = mySession(message.payload.sessionId);
         if (!s) return this.sendError(from, 'unknown_session', 'Session not found');
         this.link.send(from, { type: 'session.history.result', payload: { sessionId: s.id, events: s.history() } });
         return;
       }
       case 'message.send': {
-        const s = this.sessions.get(message.payload.sessionId);
+        const s = mySession(message.payload.sessionId);
         if (!s) return this.sendError(from, 'unknown_session', 'Session not found');
+        if (!owner && !this.executorForSession(s.id)) return this.sendError(from, 'no_computer', 'Add a computer first (phone icon → Add a computer): your chats work on your own computer.');
         this.enforceLiveLimit(s.id);
         try {
           await s.send({ text: message.payload.text, attachments: message.payload.attachments, from });
@@ -450,34 +563,36 @@ export class Brain {
         return;
       }
       case 'session.interrupt':
-        return this.sessions.get(message.payload.sessionId)?.interrupt();
-      case 'permission.respond':
-        this.permissions.respond(message.payload.requestId, message.payload.decision, from);
+        return mySession(message.payload.sessionId)?.interrupt();
+      case 'permission.respond': {
+        const sessionId = this.permissionSession(message.payload.requestId);
+        if (sessionId && this.userOfSession(sessionId) === userId) this.permissions.respond(message.payload.requestId, message.payload.decision, from);
         return;
+      }
       case 'control.kill':
-        return this.kill();
+        return this.kill(userId);
       case 'session.configure': {
-        const s = this.sessions.get(message.payload.sessionId);
+        const s = mySession(message.payload.sessionId);
         if (!s) return this.sendError(from, 'unknown_session', 'Session not found');
         const model = message.payload.model === 'default' ? null : message.payload.model;
         await s.configure({ model, effort: message.payload.effort });
         return;
       }
       case 'session.hide':
-        this.sessions.get(message.payload.sessionId)?.setHidden(message.payload.hidden);
+        mySession(message.payload.sessionId)?.setHidden(message.payload.hidden);
         return;
       case 'session.delete': {
-        const s = this.sessions.get(message.payload.sessionId);
+        const s = mySession(message.payload.sessionId);
         if (!s) return;
         for (const p of this.permissions.outstanding()) if (p.sessionId === s.id) this.permissions.respond(p.requestId, 'deny', 'deleted');
         s.destroy();
         this.sessions.delete(s.id);
         this.persistNow();
-        this.toClients({ type: 'session.deleted', payload: { sessionId: s.id } });
+        this.toClients(userId, { type: 'session.deleted', payload: { sessionId: s.id } });
         return;
       }
       case 'session.rename': {
-        const s = this.sessions.get(message.payload.sessionId);
+        const s = mySession(message.payload.sessionId);
         if (!s) return this.sendError(from, 'unknown_session', 'Session not found');
         s.rename(message.payload.title.trim());
         return;
@@ -486,19 +601,20 @@ export class Brain {
         this.link.send(from, { type: 'models.result', payload: { models: await this.listModels() } });
         return;
       case 'activity.get':
-        this.link.send(from, { type: 'activity.result', payload: this.activity() });
+        this.link.send(from, { type: 'activity.result', payload: this.activity(userId) });
         return;
       case 'computers.get':
-        this.link.send(from, { type: 'computers.result', payload: this.computers() });
+        this.link.send(from, { type: 'computers.result', payload: this.computers(userId) });
         return;
       case 'computer.select': {
         const { deviceId, sessionId, project } = message.payload;
         if (deviceId === MAC_DEVICE_ID) {
-          if (sessionId) this.sessions.get(sessionId)?.setExecutor(undefined, project);
+          if (!owner) return this.sendError(from, 'not_owner', "Only the Mac's owner can work on the Mac itself");
+          if (sessionId) mySession(sessionId)?.setExecutor(undefined, project);
         } else {
-          if (!this.executorDevices().some((d) => d.deviceId === deviceId)) return this.sendError(from, 'unknown_computer', 'That computer is not paired');
-          if (sessionId && this.hasTools(deviceId)) this.sessions.get(sessionId)?.setExecutor(deviceId, project);
-          else this.state.activeExecutor = deviceId;
+          if (!myComputer(deviceId)) return this.sendError(from, 'unknown_computer', 'That computer is not paired');
+          if (sessionId && this.hasTools(deviceId)) mySession(sessionId)?.setExecutor(deviceId, project);
+          else this.setActiveExecutor(userId, deviceId);
         }
         this.schedulePersist();
         this.broadcastComputers();
@@ -507,7 +623,7 @@ export class Brain {
       }
       case 'computer.open': {
         const { deviceId, path } = message.payload;
-        if (!this.executorDevices().some((d) => d.deviceId === deviceId)) return this.sendError(from, 'unknown_computer', 'That computer is not paired');
+        if (!myComputer(deviceId)) return this.sendError(from, 'unknown_computer', 'That computer is not paired');
         if (!this.link.send(deviceId, { type: 'workspace.open', payload: { path } })) this.sendError(from, 'computer_offline', 'The computer is offline');
         return;
       }
@@ -518,11 +634,11 @@ export class Brain {
           message.type === 'clipboard.get'
             ? this.link.send(from, { type: 'clipboard.result', payload: { requestId, deviceId, error } })
             : this.link.send(from, { type: 'clipboard.written', payload: { requestId, deviceId, error } });
-        if (!this.executorDevices().some((d) => d.deviceId === deviceId)) return void fail('That computer is not paired');
+        if (!myComputer(deviceId)) return void fail('That computer is not paired');
         const body: InnerMessageBody =
           message.type === 'clipboard.get' ? { type: 'clipboard.read', payload: { requestId } } : { type: 'clipboard.write', payload: { requestId, item: message.payload.item } };
         if (!this.link.isOnline(deviceId) || !this.link.send(deviceId, body)) return void fail('The computer is offline');
-        this.state.activeExecutor = deviceId;
+        this.setActiveExecutor(userId, deviceId);
         const timer = setTimeout(() => {
           if (this.clipboardRequests.delete(requestId)) fail('The computer did not answer');
         }, CLIPBOARD_TIMEOUT_MS);
@@ -531,7 +647,7 @@ export class Brain {
       }
       case 'computer.pair': {
         try {
-          const ticket = this.startPairing();
+          const ticket = this.startPairing(undefined, { userId });
           this.link.send(from, { type: 'computer.pairing', payload: { code: ticket.code, safetyNumber: ticket.safetyNumber, expiresAt: ticket.expiresAt } });
         } catch (e) {
           this.sendError(from, 'pairing_failed', e instanceof Error ? e.message : String(e));
@@ -539,11 +655,21 @@ export class Brain {
         return;
       }
       case 'computer.remove': {
-        const target = this.executorDevices().find((d) => d.deviceId === message.payload.deviceId);
+        const target = this.executorDevices(userId).find((d) => d.deviceId === message.payload.deviceId);
         if (!target) return;
         this.removeDevice(target.deviceId);
-        const panel = this.state.devices.find((d) => d.role === 'client' && d.name === `${target.name} (VS Code)`);
+        const panel = this.state.devices.find((d) => d.userId === userId && d.role === 'client' && d.name === `${target.name} (VS Code)`);
         if (panel) this.removeDevice(panel.deviceId);
+        return;
+      }
+      case 'user.invite': {
+        if (!owner) return this.sendError(from, 'not_owner', "Only the Mac's owner can invite people");
+        try {
+          const t = this.startPairing(undefined, { invite: {} });
+          this.link.send(from, { type: 'user.invitation', payload: { uri: t.uri, code: t.code, safetyNumber: t.safetyNumber, expiresAt: t.expiresAt } });
+        } catch (e) {
+          this.sendError(from, 'pairing_failed', e instanceof Error ? e.message : String(e));
+        }
         return;
       }
       default:
@@ -567,12 +693,13 @@ export class Brain {
     return this.models ?? FALLBACK_MODELS;
   }
 
-  private activity(): PayloadOf<'activity.result'> {
+  private activity(userId: string): PayloadOf<'activity.result'> {
     const pending = this.permissions.outstanding();
+    const executor = this.defaultExecutor(userId);
     return {
       at: Date.now(),
       sessions: [...this.sessions.values()]
-        .filter((s) => s.live || s.meta.state !== 'idle' || s.busy)
+        .filter((s) => this.userOfSession(s.id) === userId && (s.live || s.meta.state !== 'idle' || s.busy))
         .map((s) => ({
           sessionId: s.id,
           title: s.meta.title,
@@ -589,9 +716,9 @@ export class Brain {
           ...(s.turnStarted ? { turnStartedAt: s.turnStarted } : {}),
         })),
       executor: {
-        online: this.executor.online(this.defaultExecutor()),
-        workspaces: this.executor.info(this.defaultExecutor())?.workspaces ?? [],
-        ...(this.executor.info(this.defaultExecutor())?.os ? { os: this.executor.info(this.defaultExecutor())!.os } : {}),
+        online: this.executor.online(executor),
+        workspaces: this.executor.info(executor)?.workspaces ?? [],
+        ...(this.executor.info(executor)?.os ? { os: this.executor.info(executor)!.os } : {}),
       },
       ...(this.claudeVersion ? { claudeVersion: this.claudeVersion } : {}),
     };
@@ -619,7 +746,7 @@ export class Brain {
         ),
       emit: (sessionId: string, event: SessionEvent, durable: boolean) => this.emitEvent(sessionId, event, durable),
       metaChanged: (meta: SessionMeta) => {
-        this.toClients({ type: 'session.updated', payload: { session: meta } }, undefined, true);
+        this.toClients(meta.userId ?? OWNER_ID, { type: 'session.updated', payload: { session: meta } }, undefined, true);
         this.schedulePersist();
       },
       canUseTool: async (sessionId: string, tool: string, input: Record<string, unknown>, signal: AbortSignal) => {
@@ -658,7 +785,7 @@ export class Brain {
     this.flushDeltas(sessionId);
     if (event.kind === 'result') this.recordUsage(sessionId, event);
     const hint: PushHint | undefined = event.kind === 'result' ? 'completed' : undefined;
-    this.toClients({ type: 'session.event', payload: { sessionId, event } }, hint, !durable);
+    this.toClients(this.userOfSession(sessionId), { type: 'session.event', payload: { sessionId, event } }, hint, !durable);
   }
 
   private recordUsage(sessionId: string, e: Extract<SessionEvent, { kind: 'result' }>): void {
@@ -682,51 +809,60 @@ export class Brain {
     if (!pending) return;
     clearTimeout(pending.timer);
     this.pendingDeltas.delete(sessionId);
-    this.toClients({ type: 'session.event', payload: { sessionId, event: { kind: 'text_delta', text: pending.text } } }, undefined, true);
+    this.toClients(this.userOfSession(sessionId), { type: 'session.event', payload: { sessionId, event: { kind: 'text_delta', text: pending.text } } }, undefined, true);
   }
 
-  private toClients(body: InnerMessageBody, pushHint?: PushHint, onlineOnly = false): void {
+  /** Sends to one person's clients (and mirrors chat traffic to their overlay computers). */
+  private toClients(userId: string, body: InnerMessageBody, pushHint?: PushHint, onlineOnly = false): void {
     for (const d of this.state.devices) {
-      if (d.role !== 'client') continue;
+      if (d.role !== 'client' || d.userId !== userId) continue;
       if (onlineOnly && !this.link.isOnline(d.deviceId)) continue;
       this.link.send(d.deviceId, body, pushHint);
     }
     if (!OVERLAY_MIRRORED.has(body.type)) return;
     // The relay never queues for executors, so only online overlays matter; they fetch history when they come back.
-    for (const d of this.executorDevices()) {
+    for (const d of this.executorDevices(userId)) {
       if (this.isOverlay(d.deviceId) && this.link.isOnline(d.deviceId)) this.link.send(d.deviceId, body);
     }
   }
 
-  private hostStatus(): InnerMessageBody {
+  private hostStatus(userId: string): InnerMessageBody {
+    const executor = this.defaultExecutor(userId);
+    const user = this.state.users.find((u) => u.id === userId);
     return {
       type: 'host.status',
       payload: {
         ready: !!this.claudeVersion,
         ...(this.claudeVersion ? {} : { reason: 'Claude Code was not found on the Mac' }),
         ...(this.claudeVersion ? { claudeVersion: this.claudeVersion } : {}),
-        executorOnline: this.executor.online(this.defaultExecutor()),
-        workspaces: this.executor.info(this.defaultExecutor())?.workspaces ?? [],
+        executorOnline: this.executor.online(executor),
+        workspaces: this.executor.info(executor)?.workspaces ?? [],
+        ...(user ? { user: { id: user.id, name: user.name, owner: user.owner === true } } : {}),
       },
     };
   }
 
   private sendStatus(to: string): void {
-    this.link.send(to, this.hostStatus());
-    this.link.send(to, { type: 'computers.result', payload: this.computers() });
-    this.link.send(to, { type: 'session.list.result', payload: { sessions: this.sortedSessions() } });
+    const userId = this.userOf(to);
+    if (!userId) return;
+    this.link.send(to, this.hostStatus(userId));
+    this.link.send(to, { type: 'computers.result', payload: this.computers(userId) });
+    this.link.send(to, { type: 'session.list.result', payload: { sessions: this.sortedSessions(userId) } });
   }
 
   private broadcastStatus(pushHint?: PushHint): void {
-    this.toClients(this.hostStatus(), pushHint, !pushHint);
+    for (const u of this.state.users) this.toClients(u.id, this.hostStatus(u.id), pushHint, !pushHint);
   }
 
   private sendError(to: string, code: string, message: string): void {
     this.link.send(to, { type: 'error', payload: { code, message } });
   }
 
-  private sortedSessions(): SessionMeta[] {
-    return [...this.sessions.values()].map((s) => s.meta).sort((a, b) => b.updatedAt - a.updatedAt);
+  private sortedSessions(userId: string): SessionMeta[] {
+    return [...this.sessions.values()]
+      .filter((s) => this.userOfSession(s.id) === userId)
+      .map((s) => s.meta)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   private async detectClaudeVersion(): Promise<void> {

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -35,7 +35,20 @@ export interface PairedDevice {
   signPub: string;
   encPub: string;
   pairedAt: number;
+  /** The person this device belongs to; see `User`. */
+  userId: string;
 }
+
+/** A person using this Mac's Claude: their phone(s), computers and chats are theirs alone. */
+export interface User {
+  id: string;
+  name: string;
+  createdAt: number;
+  /** The Mac's owner: may work on the Mac itself, invite people and manage them from the CLI. */
+  owner?: boolean;
+}
+
+export const OWNER_ID = 'owner';
 
 export interface UsageTotals {
   turns: number;
@@ -51,6 +64,7 @@ export interface BrainState {
   /** Address phones and computers use; goes into pairing codes. Defaults to `relayUrl`. */
   publicRelayUrl?: string;
   devices: PairedDevice[];
+  users: User[];
   /** "Always allow" rules, see allowlist.ts. */
   allowlist: string[];
   sessions: SessionMeta[];
@@ -58,17 +72,43 @@ export interface BrainState {
   usage?: { days: Record<string, UsageTotals>; sessions: Record<string, UsageTotals> };
   model?: string;
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-  /** Computer new chats work on; the last one picked on the phone. */
+  /** Default computer per person (`userId` → `deviceId`): the one picked last on their phone. */
+  activeExecutors?: Record<string, string>;
+  /** @deprecated single-user default computer; `migrateState` moves it into `activeExecutors`. */
   activeExecutor?: string;
 }
 
 const DEFAULT_STATE: BrainState = {
   relayUrl: process.env.POCKET_RELAY_URL ?? 'http://127.0.0.1:8787',
   devices: [],
+  users: [],
   allowlist: [],
   sessions: [],
   replay: {},
 };
+
+/**
+ * Brings state from before people existed up to date, in place: everything that was there belongs to the owner.
+ * Idempotent, so it also runs on every daemon start and on states handed to `Brain` directly.
+ */
+export function migrateState(state: BrainState): BrainState {
+  state.users ??= [];
+  if (!state.users.some((u) => u.owner)) {
+    let name = 'Owner';
+    try {
+      name = userInfo().username || name;
+    } catch {}
+    state.users.unshift({ id: OWNER_ID, name, createdAt: Date.now(), owner: true });
+  }
+  const owner = state.users.find((u) => u.owner)!;
+  for (const d of state.devices) d.userId ||= owner.id;
+  for (const s of state.sessions) s.userId ||= owner.id;
+  if (state.activeExecutor) {
+    state.activeExecutors = { ...state.activeExecutors, [owner.id]: state.activeExecutor };
+    delete state.activeExecutor;
+  }
+  return state;
+}
 
 export function ensureDirs(): void {
   for (const dir of [paths.home, paths.sessionsDir, paths.workDir, paths.logDir]) mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -91,9 +131,9 @@ export function ensureSkillsPlugin(): string | null {
 
 export function loadState(): BrainState {
   try {
-    return { ...DEFAULT_STATE, ...JSON.parse(readFileSync(paths.state, 'utf8')) };
+    return migrateState({ ...DEFAULT_STATE, ...JSON.parse(readFileSync(paths.state, 'utf8')) });
   } catch {
-    return structuredClone(DEFAULT_STATE);
+    return migrateState(structuredClone(DEFAULT_STATE));
   }
 }
 

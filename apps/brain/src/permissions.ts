@@ -14,7 +14,7 @@ interface Pending {
 export interface PermissionHost {
   isAllowedAlways(toolName: string, input: Record<string, unknown>): boolean;
   request(p: { requestId: string; sessionId: string; tool: string; input: unknown; expiresAt: number }): void;
-  resolved(requestId: string, decision: PermissionDecision, by: string): void;
+  resolved(requestId: string, sessionId: string, decision: PermissionDecision, by: string): void;
   waiting(sessionId: string, waiting: boolean): void;
 }
 
@@ -51,7 +51,7 @@ export class PermissionBroker {
     });
 
     if (decision === 'timeout' || decision === 'cancelled') {
-      this.host.resolved(requestId, 'deny', decision);
+      this.host.resolved(requestId, sessionId, 'deny', decision);
       return { behavior: 'deny', message: decision === 'timeout' ? 'The user did not answer in time.' : 'Cancelled.' };
     }
     if (decision === 'deny') return { behavior: 'deny', message: 'The user denied this action.' };
@@ -68,7 +68,7 @@ export class PermissionBroker {
     const p = this.pending.get(requestId);
     if (!p) return false;
     p.resolve(decision);
-    this.host.resolved(requestId, decision, by);
+    this.host.resolved(requestId, p.sessionId, decision, by);
     return true;
   }
 
