@@ -1,0 +1,20 @@
+{
+  "name": "@pocket/clipboard-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "build:exe": "bash scripts/build-exe.sh"
+  },
+  "dependencies": {
+    "@pocket/protocol": "workspace:*",
+    "@pocket/transport": "workspace:*",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.2",
+    "esbuild": "^0.25.0",
+    "postject": "1.0.0-alpha.6"
+  }
+}

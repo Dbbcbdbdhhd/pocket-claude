@@ -1,0 +1,95 @@
+{
+  "name": "pocket-claude-executor",
+  "displayName": "Pocket Claude Executor",
+  "description": "Executes tool calls from a paired Pocket Claude brain in the open workspace.",
+  "version": "0.3.0",
+  "publisher": "pocket",
+  "private": true,
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "pocketClaude.pair",
+        "title": "Pocket Claude: Pair with Mac"
+      },
+      {
+        "command": "pocketClaude.unpair",
+        "title": "Pocket Claude: Unpair"
+      },
+      {
+        "command": "pocketClaude.kill",
+        "title": "Pocket Claude: Stop everything"
+      },
+      {
+        "command": "pocketClaude.togglePanel",
+        "title": "Pocket Claude: Toggle Panel"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "pocketClaude.togglePanel",
+        "key": "ctrl+alt+k"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "pocketClaude.unpair",
+          "when": "false"
+        },
+        {
+          "command": "pocketClaude.kill",
+          "when": "false"
+        },
+        {
+          "command": "pocketClaude.togglePanel",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Pocket Claude",
+      "properties": {
+        "pocketClaude.relayUrl": {
+          "type": "string",
+          "default": "https://macbook-pro-dmitrij.taild47d20.ts.net:10000",
+          "description": "Relay address used when pairing. Paired computers follow the Mac automatically if it changes."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --platform=node --format=cjs --external:vscode --target=node20 --sourcemap && esbuild src/panel/webview/main.ts --bundle --outfile=dist/webview.js --platform=browser --format=iife --target=es2022 --minify",
+    "typecheck": "tsc -p .",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "@pocket/client-core": "workspace:*",
+    "@pocket/protocol": "workspace:*",
+    "@pocket/transport": "workspace:*",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.95.0",
+    "@types/ws": "^8.18.2",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.25.0"
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "https://example.invalid/pocket-claude.git"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": false
+  }
+}

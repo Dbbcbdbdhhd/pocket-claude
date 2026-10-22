@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.pocketclaude.relay</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__RELAYBIN__</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>HOST</key>
+    <string>127.0.0.1</string>
+    <key>PORT</key>
+    <string>__RELAYPORT__</string>
+    <key>DATA_DIR</key>
+    <string>__HOME__/.pocket-claude/relay-data</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__LOGDIR__/relay.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOGDIR__/relay.err.log</string>
+</dict>
+</plist>

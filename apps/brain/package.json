@@ -1,0 +1,29 @@
+{
+  "name": "@pocket/brain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "pocket-claude": "./bin/pocket-claude.mjs"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "start": "tsx src/cli.ts daemon",
+    "cli": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.303",
+    "@anthropic-ai/sdk": "^0.135.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@pocket/protocol": "workspace:*",
+    "@pocket/transport": "workspace:*",
+    "qrcode-terminal": "^0.12.0",
+    "tsx": "^4.23.15",
+    "ws": "^8.22.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/qrcode-terminal": "^0.12.2",
+    "@types/ws": "^8.18.2"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "@pocket/relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/core.ts",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "dev:node": "tsx src/node-server.ts",
+    "dev:cf": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@pocket/protocol": "workspace:*",
+    "tsx": "^4.23.15",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261019.1",
+    "@pocket/transport": "workspace:*",
+    "@types/ws": "^8.18.2",
+    "wrangler": "^4.151.2"
+  }
+}

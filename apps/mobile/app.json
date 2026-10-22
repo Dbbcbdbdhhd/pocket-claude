@@ -1,0 +1,82 @@
+{
+  "expo": {
+    "name": "Pocket",
+    "slug": "pocket-claude",
+    "version": "0.1.0",
+    "scheme": "pocketclaude",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#000000",
+    "newArchEnabled": true,
+    "platforms": [
+      "android",
+      "web"
+    ],
+    "icon": "./assets/icon.png",
+    "android": {
+      "package": "dev.pocketclaude.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#000000"
+      },
+      "permissions": [
+        "CAMERA",
+        "USE_BIOMETRIC",
+        "VIBRATE"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ],
+          "data": [
+            {
+              "scheme": "pocketclaude",
+              "host": "pair"
+            }
+          ]
+        }
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Pocket uses the camera to scan the pairing QR code."
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Unlock Pocket."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#000000",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 160
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Pocket attaches photos you pick to messages.",
+          "cameraPermission": "Pocket uses the camera to take photos for messages.",
+          "microphonePermission": false
+        }
+      ],
+      "expo-video",
+      "expo-image",
+      "expo-font"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}
