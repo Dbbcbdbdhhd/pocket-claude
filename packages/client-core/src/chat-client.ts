@@ -177,7 +177,7 @@ export class ChatClient {
     this.request({ type: 'session.history', payload: { sessionId } });
   }
 
-  send(sessionId: string, text: string, attachments?: { mime: string; dataBase64: string }[]): boolean {
+  send(sessionId: string, text: string, attachments?: { mime: string; dataBase64: string; name?: string }[]): boolean {
     return this.request({ type: 'message.send', payload: { sessionId, text, ...(attachments?.length ? { attachments } : {}) } });
   }
 
