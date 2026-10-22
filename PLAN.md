@@ -117,18 +117,31 @@
 
 - [x] Изучить репозиторий, зафиксировать решения, разбить на этапы.
 
-### Этап 1 — Windows-оверлей (M)
+### Этап 1 — Windows-оверлей (M) — код готов, ждёт приёмки на Windows
 
-- [ ] 1.0 Инфраструктура: GitHub Actions (`pnpm install`, `typecheck`, `test` на каждый push/PR), корневой README.
-- [ ] 1.1 Протокол + brain: capability `overlay`, рассылка событий сессий таким executor'ам, `session.list`/`session.history` для них, тесты в `apps/brain/test`.
-- [ ] 1.2 Общий markdown-парсер в `client-core` (из `panel/webview/format.ts`), тесты.
-- [ ] 1.3 Агент: модель оверлея (сессии, реплики, стриминг, «активная» сессия — последняя по времени), протокол окна, команда `overlay on|off`, тесты с фейковым процессом окна.
-- [ ] 1.4 PowerShell-окно: WinForms, правый край, без панели задач, двойной Alt, Esc, блоки кода с «Копировать», «Копировать ответ».
-- [ ] 1.5 Сборка `PocketClipboard.exe`, чек-лист приёмки на Windows.
+- [x] 1.0 Инфраструктура: GitHub Actions (`pnpm install`, `typecheck`, `test` на каждый push/PR), корневой README.
+- [x] 1.1 Brain: capability `overlay` — таким компьютерам зеркалятся `session.event/created/updated/deleted`, разрешены `session.list` и `session.history` (и ничего больше); тест `apps/brain/test/overlay.test.ts` (relay + brain + два компьютера + телефон).
+- [x] 1.2 Markdown-парсер и сводки тулов вынесены в `packages/client-core/src/format.ts`; панель VS Code импортирует оттуда.
+- [x] 1.3 Агент: `overlay/model.ts` (следит за последним чатом, стриминг через upsert по id, переключается на чат, в котором пишет телефон), `overlay/window.ts` (процесс окна, JSON-строки через stdin/stdout, перезапуск с backoff), capability `overlay` в `executor.status`, команда `PocketClipboard.exe overlay on|off` (и на лету через управляющий канал). Тесты: `overlay-model.test.ts`, `overlay-window.test.ts`.
+- [x] 1.4 PowerShell-окно (`overlay/script.ts`, пишется в `%LOCALAPPDATA%\PocketClipboard\overlay.ps1`): WinForms, правый край, без панели задач и Alt+Tab, не забирает фокус, тёмная тема, DPI-aware; двойной Alt показывает/прячет, Esc и «✕» прячут; код моноширинным, двойной клик по коду копирует его, кнопки «Copy code» (блок под курсором или последний) и «Copy reply»; перетаскивается за заголовок. Синтаксис проверен парсером PowerShell 7; выполнение — только на Windows.
+- [ ] 1.5 Приёмка на Windows по чек-листу ниже.
 
-**Выход:** на Windows двойной Alt показывает окно с ответами из чата на телефоне; код копируется в один клик.
-**Проверка:** `pnpm test`, `pnpm typecheck`; на Windows — чек-лист (установка → двойной Alt → сообщение с телефона → ответ стримится → «Копировать» → вставка в Блокнот → Esc).
-**От тебя:** прогнать чек-лист на Windows (с Mac нужен `node.exe` для сборки exe, как сейчас в `build-exe.sh`).
+**Проверка здесь:** `pnpm test` (194 теста), `pnpm typecheck`, сборка расширения VS Code, бандл агента esbuild, парсер PowerShell на `overlay.ps1`.
+
+**Чек-лист приёмки на Windows (от тебя):**
+
+1. Собрать на Mac: `bash tools/scripts/make-usb.sh` (нужен Windows `node.exe` той же версии, что `node` на Mac: `~/.cache/pocket-build/node.exe` или переменная `POCKET_WIN_NODE`). Скопировать `dist/usb/PocketClipboard.exe` на ПК и запустить — он заменит старую версию, пейринг сохранится (если не спарен — спросит код с телефона).
+2. `PocketClipboard.exe status` → `running, paired with account …, overlay on`.
+3. Дважды быстро нажать Alt → справа появляется тёмное окно. Фокус остаётся в редакторе; окна нет в панели задач и в Alt+Tab.
+4. На телефоне написать в чат → в окне «You …», затем «Claude …» появляется по мере ответа.
+5. Попросить код → блок кода моноширинным. Двойной клик по коду → «Copied code» → Ctrl+V в Блокнот вставляет ровно этот блок. «Copy reply» копирует весь ответ.
+6. Esc (когда окно в фокусе) или «✕» прячут окно; двойной Alt снова показывает.
+7. Alt+Tab, Alt+Shift (смена языка), Alt+F4, Alt+буква не открывают окно. Одиночный Alt — тоже.
+8. Новый чат на телефоне или сообщение в другом чате → окно переключается на него; переименование чата меняет заголовок.
+9. Выключить brain на Mac → внизу «Mac is offline»; включить → содержимое обновляется само.
+10. `PocketClipboard.exe overlay off` → окно исчезает; `overlay on` → снова работает (без перезапуска).
+11. Перезагрузка ПК → агент стартует сам, двойной Alt работает.
+12. При проблемах: `%LOCALAPPDATA%\PocketClipboard\agent.log`, строки `overlay:`.
 
 ### Этап 2 — Несколько пользователей (M)
 
@@ -196,3 +209,4 @@
 
 - 2026-10-22 — план составлен, ждёт подтверждения.
 - 2026-10-22 — план подтверждён (см. «Решения»). Начат этап 1.
+- 2026-10-22 — этап 1: код и тесты готовы (CI, README, brain, client-core, агент, PowerShell-окно). Ждёт приёмки на Windows. Следующий — этап 2 (пользователи).
