@@ -18,6 +18,7 @@ import {
   type Identity,
   TOOL_NAMES,
   type InnerMessageBody,
+  type MessageType,
   type ModelInfo,
   type PairingBundle,
   MAC_DEVICE_ID,
@@ -49,6 +50,8 @@ const FALLBACK_MODELS: ModelInfo[] = [
 ];
 const DELTA_FLUSH_MS = 60;
 const CLIPBOARD_TIMEOUT_MS = 60_000;
+/** The only client traffic a computer with the 'overlay' capability gets to see: the chat itself, nothing it could act on. */
+const OVERLAY_MIRRORED = new Set<MessageType>(['session.event', 'session.created', 'session.updated', 'session.deleted']);
 
 export interface PairingTicket {
   code: string;
@@ -233,6 +236,11 @@ export class Brain {
     return !caps || caps.includes('tools');
   }
 
+  /** PocketClipboard with the overlay window: it mirrors the chat on screen and may read sessions, never write. */
+  private isOverlay(deviceId: string): boolean {
+    return !!this.executor.info(deviceId)?.capabilities?.includes('overlay');
+  }
+
   /** The computer a chat works on, or undefined for the Mac itself (the default). */
   private executorForSession(sessionId: string): string | undefined {
     const chosen = this.sessions.get(sessionId)?.meta.executorId;
@@ -390,6 +398,14 @@ export class Brain {
           this.executor.setInfo(from, message.payload);
           this.broadcastComputers();
           return this.broadcastStatus();
+        case 'session.list':
+          if (this.isOverlay(from)) this.link.send(from, { type: 'session.list.result', payload: { sessions: this.sortedSessions() } });
+          return;
+        case 'session.history': {
+          const s = this.isOverlay(from) ? this.sessions.get(message.payload.sessionId) : undefined;
+          if (s) this.link.send(from, { type: 'session.history.result', payload: { sessionId: s.id, events: s.history() } });
+          return;
+        }
         default:
           return;
       }
@@ -674,6 +690,11 @@ export class Brain {
       if (d.role !== 'client') continue;
       if (onlineOnly && !this.link.isOnline(d.deviceId)) continue;
       this.link.send(d.deviceId, body, pushHint);
+    }
+    if (!OVERLAY_MIRRORED.has(body.type)) return;
+    // The relay never queues for executors, so only online overlays matter; they fetch history when they come back.
+    for (const d of this.executorDevices()) {
+      if (this.isOverlay(d.deviceId) && this.link.isOnline(d.deviceId)) this.link.send(d.deviceId, body);
     }
   }
 

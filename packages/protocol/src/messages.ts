@@ -230,7 +230,10 @@ export const innerMessageBodySchema = z.discriminatedUnion('type', [
     os: z.string(),
     shell: z.string(),
     projects: z.array(projectSchema).optional(),
-    /** What this computer offers: 'tools' (VS Code extension), 'clipboard' (PocketClipboard). */
+    /**
+     * What this computer offers: 'tools' (VS Code extension), 'clipboard' (PocketClipboard),
+     * 'overlay' (PocketClipboard shows the chat on screen: it receives session events and may list sessions and read history).
+     */
     capabilities: z.array(z.string()).optional(),
   })),
 
